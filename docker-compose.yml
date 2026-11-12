@@ -1,0 +1,16 @@
+# Local development helpers only. Production uses managed Redis + Cloudflare R2.
+#
+#   docker compose up -d redis
+#
+# BullMQ needs `noeviction` so queued jobs are never silently dropped.
+services:
+  redis:
+    image: redis:7-alpine
+    command: ["redis-server", "--maxmemory-policy", "noeviction", "--appendonly", "yes"]
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis-data:/data
+
+volumes:
+  redis-data:

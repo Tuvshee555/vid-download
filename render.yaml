@@ -1,0 +1,91 @@
+# Render Blueprint — API, worker and Redis (Key Value). The web app deploys to Vercel.
+# NOT validated against Render's API from the development machine: review the plans, region
+# and env vars in the dashboard when you first apply it (New → Blueprint → select this repo).
+#
+# Variables marked `sync: false` are prompted for during the first apply and are never stored in git.
+
+services:
+  - type: web
+    name: mediadock-api
+    runtime: docker
+    dockerfilePath: ./apps/api/Dockerfile
+    dockerContext: .
+    plan: starter
+    healthCheckPath: /health
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: TRUST_PROXY
+        value: "true"
+      - key: SESSION_SECRET
+        generateValue: true
+      - key: ACCESS_PASSWORD_HASH      # from: npm run hash-password
+        sync: false
+      - key: WEB_ORIGIN                # e.g. https://media.example.com (your Vercel URL / domain)
+        sync: false
+      - key: API_PUBLIC_URL            # this service's public URL, e.g. https://mediadock-api.onrender.com
+        sync: false
+      - key: REDIS_URL
+        fromService:
+          type: keyvalue
+          name: mediadock-redis
+          property: connectionString
+      - key: STORAGE_DRIVER
+        value: s3
+      - key: S3_ENDPOINT               # https://<ACCOUNT_ID>.r2.cloudflarestorage.com
+        sync: false
+      - key: S3_REGION
+        value: auto
+      - key: S3_BUCKET
+        sync: false
+      - key: S3_ACCESS_KEY_ID
+        sync: false
+      - key: S3_SECRET_ACCESS_KEY
+        sync: false
+      - key: INSTAGRAM_ACCESS_TOKEN    # optional
+        sync: false
+      - key: FACEBOOK_ACCESS_TOKEN     # optional
+        sync: false
+      - key: YOUTUBE_API_KEY           # optional (metadata only)
+        sync: false
+
+  - type: worker
+    name: mediadock-worker
+    runtime: docker
+    dockerfilePath: ./apps/worker/Dockerfile
+    dockerContext: .
+    plan: starter
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: REDIS_URL
+        fromService:
+          type: keyvalue
+          name: mediadock-redis
+          property: connectionString
+      - key: STORAGE_DRIVER
+        value: s3
+      - key: S3_ENDPOINT
+        sync: false
+      - key: S3_REGION
+        value: auto
+      - key: S3_BUCKET
+        sync: false
+      - key: S3_ACCESS_KEY_ID
+        sync: false
+      - key: S3_SECRET_ACCESS_KEY
+        sync: false
+      - key: WORKER_CONCURRENCY
+        value: "2"
+      - key: INSTAGRAM_ACCESS_TOKEN
+        sync: false
+      - key: FACEBOOK_ACCESS_TOKEN
+        sync: false
+      - key: YOUTUBE_API_KEY
+        sync: false
+
+  - type: keyvalue
+    name: mediadock-redis
+    plan: starter
+    maxmemoryPolicy: noeviction        # required by BullMQ: never silently drop queued jobs
+    ipAllowList: []                    # internal-only: reachable from the API and worker, not the internet

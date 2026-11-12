@@ -1,0 +1,22 @@
+node_modules/
+dist/
+.next/
+out/
+coverage/
+*.tsbuildinfo
+next-env.d.ts
+.turbo/
+
+# secrets & local state — never commit
+.env
+.env.*
+!.env.example
+.data/
+tmp/
+
+# OS / editor
+.DS_Store
+Thumbs.db
+.vscode/*
+!.vscode/extensions.json
+npm-debug.log*

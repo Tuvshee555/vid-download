@@ -1,0 +1,40 @@
+{
+  "name": "mediadock",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Private, self-hosted media converter: authorized sources in, MP4/MP3 out.",
+  "type": "module",
+  "workspaces": [
+    "packages/*",
+    "apps/*"
+  ],
+  "engines": {
+    "node": ">=22.12"
+  },
+  "scripts": {
+    "dev": "concurrently -k -n api,worker,web -c blue,magenta,green \"npm:dev:api\" \"npm:dev:worker\" \"npm:dev:web\"",
+    "dev:api": "tsx watch --env-file-if-exists=.env apps/api/src/index.ts",
+    "dev:worker": "tsx watch --env-file-if-exists=.env apps/worker/src/index.ts",
+    "dev:web": "npm run dev -w @vd/web",
+    "build": "npm run build -w @vd/api -w @vd/worker -w @vd/web",
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "lint": "eslint packages apps/api apps/worker scripts && npm run lint -w @vd/web",
+    "test": "npm run test --workspaces --if-present",
+    "check": "npm run typecheck && npm run lint && npm run test && npm run build",
+    "hash-password": "tsx scripts/hash-password.ts",
+    "test:e2e": "npm run test:e2e -w @vd/worker"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.39.0",
+    "@types/node": "^22.20.5",
+    "concurrently": "^10.0.7",
+    "eslint": "^9.39.5",
+    "globals": "^17.14.0",
+    "tsup": "^9.0.0",
+    "tsx": "^4.23.15",
+    "typescript": "~5.9.3",
+    "typescript-eslint": "^8.72.2",
+    "vite": "^7.3.8",
+    "vitest": "^5.1.0"
+  }
+}
