@@ -13,7 +13,7 @@ Live deployment: **https://mediadock.vercel.app** (password in your notes — it
 | **Instagram** | ✅ | ✅ | Public reels and video posts. Private accounts, stories and photo posts aren't supported. |
 | **Facebook** | ✅ | ✅ | Public videos, reels, `fb.watch` and share links. Facebook often serves VP9, which is re-encoded to H.264 (slower: ~1–2 min for a 1-min 1080p clip on Vercel). |
 | **TikTok** | ✅ | ✅ | Videos incl. `vm.tiktok.com` / `vt.tiktok.com` / `tiktok.com/t/` share links. H.264 qualities are offered so nothing has to be re-encoded. |
-| **YouTube** | ⚠️ blocked | ✅ | YouTube blocks most cloud/datacenter servers ("Sign in to confirm you're not a bot"). From a home connection it works, up to 1080p. See [YouTube on a cloud server](#youtube-on-a-cloud-server). |
+| **YouTube** | ✅ via your home PC helper | ✅ | YouTube blocks every cloud/datacenter server ("Sign in to confirm you're not a bot"), so the live site hands YouTube links to a helper on your own PC. Works whenever that PC is on. See [YouTube on the live site](#youtube-on-the-live-site). |
 
 Quality options come from what the platform actually offers (e.g. *MP4 1080p / 720p / 480p / 360p / MP3*);
 sizes are the platform's own estimates, never made up. Finished files are deleted automatically after
@@ -76,14 +76,29 @@ npm run try -- "https://www.tiktok.com/@realmadrid/video/7707305867162570017" "h
 Limits on Vercel (Hobby, all overridable via env): 300 s per conversion, input ≤ 400 MB, videos ≤ 30 min.
 Blob on Hobby includes limited free storage/transfer per month; files are deleted after an hour, so storage stays tiny.
 
-### YouTube on a cloud server
+### YouTube on the live site
 
-YouTube refuses most datacenter IPs. Options, in order of preference:
-1. **Run MediaDock at home** for YouTube (above) — nothing to configure.
-2. **Cookies**: export cookies from a browser logged into a **spare** Google account (a "cookies.txt" export
-   extension), then set `YTDLP_COOKIES` to the file's contents (or `YTDLP_COOKIES_FILE` to a path) and redeploy.
-   Google may flag accounts used this way, and cookies expire, so this needs occasional refreshing. It may still be
-   blocked — YouTube's checks change often.
+YouTube refuses requests from cloud servers (tested from Vercel with every yt-dlp client: all blocked). So for YouTube
+the live site uses a **home helper**: the same app running on your PC, reached through a permanent ngrok address.
+
+```
+phone/laptop ─► mediadock.vercel.app ──(YouTube link + shared secret)──► your PC (home internet) ─► YouTube
+                         ▲                                                   │ yt-dlp + FFmpeg
+                         └──────────── live progress ◄────────────────────── ┘ finished file ─► Vercel Blob ─► download link
+```
+
+- Instagram, Facebook and TikTok never touch your PC. Only YouTube does, and only while the PC is on — otherwise the
+  site says the helper is offline.
+- The helper starts hidden when you sign in to Windows (`Startup\MediaDock YouTube helper.vbs`; delete it to stop).
+  Manual start: `npm run youtube-helper`. Logs: `%LOCALAPPDATA%\MediaDock\helper.log`.
+- It updates yt-dlp on every start, runs the app on port 3010, opens the tunnel and restarts both if they stop.
+- Settings (secrets, kept outside the repo): `%LOCALAPPDATA%\MediaDock\helper.env` — `RELAY_DOMAIN`, `RELAY_SECRET`,
+  `ACCESS_PASSWORD_HASH`, `SESSION_SECRET`, `BLOB_READ_WRITE_TOKEN`. The Vercel project has the matching
+  `RELAY_URL`, `RELAY_SECRET` and `RELAY_PLATFORMS=youtube`. Requests without the secret are refused.
+
+Alternative without a PC: put cookies from a **spare** Google account in `YTDLP_COOKIES` (Netscape cookies.txt contents)
+and remove `RELAY_URL`. Google may flag accounts used this way, cookies expire, and YouTube may still block — the helper is
+more reliable.
 
 ## Self-hosted mode (API + worker)
 
@@ -129,7 +144,8 @@ Latest results (Windows 11, Node 22.18, FFmpeg 8.1, yt-dlp 2026.10.26):
 
 Real-world checks with football videos, through the actual UI in a real browser:
 - **Local** (home connection): YouTube 1080p, Instagram 720p, Facebook 1080p, TikTok 576p MP4 and TikTok MP3 — all passed.
-- **Live on Vercel**: Instagram, Facebook, TikTok (MP4 + MP3) passed; YouTube blocked by YouTube as described above.
+- **Live on Vercel**: YouTube 1080p (through the home helper, 78 s), Instagram, Facebook, TikTok MP4 + MP3 — all passed.
+  With the helper stopped, YouTube shows the "helper offline" explanation while the other platforms keep working.
 
 ## Legal
 
@@ -139,6 +155,6 @@ remove DRM or bypass logins or paywalls — private, members-only and DRM-protec
 
 ## Known limitations
 
-- YouTube from cloud servers (see above). Platforms change often; when something breaks, a newer yt-dlp usually fixes it — redeploy.
+- YouTube on the live site needs your PC on (see above). Platforms change often; when something breaks, a newer yt-dlp usually fixes it — redeploy (and restart the helper).
 - Standalone mode: 300 s per conversion on Vercel, so very long videos need the self-hosted mode or home use.
 - Photos, carousels (first video only), stories, live streams and playlists aren't supported.
