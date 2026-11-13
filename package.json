@@ -23,7 +23,8 @@
     "check": "npm run typecheck && npm run lint && npm run test && npm run build",
     "hash-password": "tsx scripts/hash-password.ts",
     "test:e2e": "npm run test:e2e -w @vd/worker",
-    "try": "tsx scripts/try-links.ts"
+    "try": "tsx scripts/try-links.ts",
+    "youtube-helper": "node scripts/youtube-helper.mjs"
   },
   "devDependencies": {
     "@eslint/js": "^9.39.0",

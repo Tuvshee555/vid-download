@@ -39,7 +39,12 @@ export default tseslint.config(
     },
   },
   {
-    files: ['scripts/**/*.ts'],
+    files: ['scripts/**/*.ts', 'scripts/**/*.mjs'],
     rules: { 'no-console': 'off' },
+  },
+  {
+    // Plain JavaScript (Node scripts): no TypeScript program to type-check against.
+    files: ['**/*.mjs'],
+    ...tseslint.configs.disableTypeChecked,
   },
 );

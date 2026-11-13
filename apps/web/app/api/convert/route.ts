@@ -15,6 +15,7 @@ import { acquireFromLink, convertInput } from '@vd/core/media';
 import { pipelineDepsFrom } from '@vd/core/runtime';
 import { jsonError, readLimitedText, SESSION_COOKIE } from '@/lib/bff';
 import { storeOutput, sweepOutputs } from '@/lib/server/output-store';
+import { HELPER_OFFLINE, isHelperResponse, isRelayRequest, relayFetch, relayTarget } from '@/lib/server/relay';
 import { serverMode, standalone, standaloneSession } from '@/lib/server/standalone';
 
 export const runtime = 'nodejs';
@@ -24,7 +25,9 @@ export const maxDuration = 300;
 
 export async function POST(request: NextRequest): Promise<Response> {
   if (serverMode() !== 'standalone') return jsonError('NOT_FOUND', { message: 'That endpoint does not exist.' });
-  if (!standaloneSession(request.cookies.get(SESSION_COOKIE)?.value)) return jsonError('UNAUTHENTICATED');
+  // A browser session, or the cloud deployment calling this instance (the home helper) with the relay secret.
+  const relayAuthorized = isRelayRequest(request.headers);
+  if (!relayAuthorized && !standaloneSession(request.cookies.get(SESSION_COOKIE)?.value)) return jsonError('UNAUTHENTICATED');
 
   const text = await readLimitedText(request, 16 * 1024);
   if (text === null) return jsonError('VALIDATION_ERROR', { status: 413, message: 'That request was too large.' });
@@ -42,6 +45,27 @@ export async function POST(request: NextRequest): Promise<Response> {
   const quality = format === 'mp4' ? (parsed.data.quality ?? null) : null;
   const detection = detectUrl(url);
   if (!detection.ok) return jsonError(detection.code, { message: detection.message });
+
+  // Platforms that block cloud servers (YouTube) are converted by the owner's home PC; stream its progress through.
+  const helper = relayTarget(detection.platform);
+  if (helper) {
+    try {
+      const upstream = await relayFetch(helper, '/api/convert', { source: 'url', url: detection.canonicalUrl, format, ...(quality ? { quality } : {}) }, request.signal);
+      if (isHelperResponse(upstream) && upstream.body) {
+        return new Response(upstream.body, {
+          status: upstream.status,
+          headers: {
+            'content-type': upstream.headers.get('content-type') ?? 'application/x-ndjson; charset=utf-8',
+            'cache-control': 'no-store, no-transform',
+            'x-accel-buffering': 'no',
+          },
+        });
+      }
+    } catch (error) {
+      console.warn('[mediadock] home helper unreachable', (error as Error).message);
+    }
+    return jsonError('PLATFORM_API_ERROR', { status: 503, message: `${HELPER_OFFLINE.message} ${HELPER_OFFLINE.guidance[0]}` });
+  }
 
   const { config } = standalone();
   const id = randomUUID();
