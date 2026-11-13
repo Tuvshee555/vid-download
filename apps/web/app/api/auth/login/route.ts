@@ -10,6 +10,7 @@ import {
   timeoutError,
   unreachableError,
 } from '@/lib/bff';
+import { serverMode, standaloneLogin } from '@/lib/server/standalone';
 
 export const dynamic = 'force-dynamic';
 
@@ -28,6 +29,14 @@ export async function POST(request: NextRequest): Promise<Response> {
   const validation = loginRequestSchema.safeParse(parsed);
   if (!validation.success) {
     return jsonError('VALIDATION_ERROR', { message: validation.error.issues[0]?.message ?? 'Enter the access password.' });
+  }
+
+  if (serverMode() === 'standalone') {
+    const session = await standaloneLogin(validation.data.password);
+    if (!session) return jsonError('UNAUTHENTICATED', { message: 'Incorrect password.' });
+    const response = NextResponse.json({ ok: true }, { headers: { 'cache-control': 'no-store' } });
+    response.cookies.set(SESSION_COOKIE, session.token, sessionCookieOptions(session.expiresAt));
+    return response;
   }
 
   const headers: Record<string, string> = { 'content-type': 'application/json', accept: 'application/json' };

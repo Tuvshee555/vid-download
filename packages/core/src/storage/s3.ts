@@ -28,11 +28,8 @@ export interface S3StorageOptions {
   forcePathStyle?: boolean;
 }
 
-/** RFC 5987 encoding so non-ASCII titles survive in Content-Disposition. */
-export function contentDisposition(filename: string): string {
-  const ascii = filename.replace(/[^\x20-\x7e]/g, '_').replace(/["\\]/g, '_');
-  return `attachment; filename="${ascii}"; filename*=UTF-8''${encodeURIComponent(filename).replace(/['()*]/g, (c) => `%${c.charCodeAt(0).toString(16).toUpperCase()}`)}`;
-}
+export { contentDisposition } from './content-disposition';
+import { contentDisposition } from './content-disposition';
 
 /** Cloudflare R2 / AWS S3 / MinIO compatible storage. */
 export class S3Storage implements ObjectStorage {

@@ -41,6 +41,13 @@ export function PlatformIcon({ platform, className }: { platform: Platform; clas
           <path d="M13.2 19v-6h2l.4-2.3h-2.4V9.4c0-.7.3-1.1 1.1-1.1h1.4V6.2a12 12 0 0 0-1.8-.1c-1.8 0-3 1.1-3 3.1v1.5H8.8V13h2.1v6" fill="currentColor" stroke="none" />
         </svg>
       );
+    case 'tiktok':
+      return (
+        <svg {...common}>
+          <path d="M14 3.5v11a3.5 3.5 0 1 1-3.5-3.5" />
+          <path d="M14 3.5c.6 2.6 2.4 4.2 5 4.4" />
+        </svg>
+      );
   }
 }
 

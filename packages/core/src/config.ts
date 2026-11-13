@@ -61,14 +61,17 @@ const envSchema = z.object({
 
   // ── FFmpeg
   FFMPEG_PATH: z.string().default('ffmpeg'),
+  /** "none" where ffprobe isn't installed: files are then inspected with ffmpeg. */
   FFPROBE_PATH: z.string().default('ffprobe'),
+  X264_PRESET: z.enum(['ultrafast', 'superfast', 'veryfast', 'faster', 'fast', 'medium', 'slow']).default('veryfast'),
 
-  // ── Official platform credentials (all optional; each integration reports "not configured" without them)
-  YOUTUBE_API_KEY: z.string().optional(),
-  INSTAGRAM_ACCESS_TOKEN: z.string().optional(),
-  INSTAGRAM_GRAPH_VERSION: z.string().regex(/^v\d+\.\d+$/).default('v23.0'),
-  FACEBOOK_ACCESS_TOKEN: z.string().optional(),
-  FACEBOOK_GRAPH_VERSION: z.string().regex(/^v\d+\.\d+$/).default('v23.0'),
+  // ── yt-dlp (link downloads)
+  YTDLP_PATH: z.string().default('yt-dlp'),
+  /** Path to a Netscape cookies file, OR the file's contents in YTDLP_COOKIES. Optional. */
+  YTDLP_COOKIES_FILE: z.string().optional(),
+  YTDLP_COOKIES: z.string().optional(),
+  /** JavaScript runtime for YouTube, e.g. "node" or "node:/usr/bin/node". Defaults to the current Node binary. */
+  YTDLP_JS_RUNTIME: z.string().optional(),
 });
 
 export interface AppConfig {
@@ -113,13 +116,12 @@ export interface AppConfig {
     fileTtlMs: number;
     linkTtlSeconds: number;
   };
-  ffmpeg: { ffmpegPath: string; ffprobePath: string };
-  platforms: {
-    youtubeApiKey: string | undefined;
-    instagramAccessToken: string | undefined;
-    instagramGraphVersion: string;
-    facebookAccessToken: string | undefined;
-    facebookGraphVersion: string;
+  ffmpeg: { ffmpegPath: string; ffprobePath: string | null; x264Preset: string };
+  ytdlp: {
+    binPath: string;
+    cookiesFile: string | null;
+    cookiesContent: string | null;
+    jsRuntime: string;
   };
 }
 
@@ -199,13 +201,16 @@ export function loadConfig(rawEnv: Record<string, string | undefined> = process.
       fileTtlMs: Math.round(e.FILE_TTL_MINUTES * MINUTE_MS),
       linkTtlSeconds: e.DOWNLOAD_LINK_TTL_SECONDS,
     },
-    ffmpeg: { ffmpegPath: e.FFMPEG_PATH, ffprobePath: e.FFPROBE_PATH },
-    platforms: {
-      youtubeApiKey: e.YOUTUBE_API_KEY,
-      instagramAccessToken: e.INSTAGRAM_ACCESS_TOKEN,
-      instagramGraphVersion: e.INSTAGRAM_GRAPH_VERSION,
-      facebookAccessToken: e.FACEBOOK_ACCESS_TOKEN,
-      facebookGraphVersion: e.FACEBOOK_GRAPH_VERSION,
+    ffmpeg: {
+      ffmpegPath: e.FFMPEG_PATH,
+      ffprobePath: e.FFPROBE_PATH.toLowerCase() === 'none' ? null : e.FFPROBE_PATH,
+      x264Preset: e.X264_PRESET,
+    },
+    ytdlp: {
+      binPath: e.YTDLP_PATH,
+      cookiesFile: e.YTDLP_COOKIES_FILE ?? null,
+      cookiesContent: e.YTDLP_COOKIES ?? null,
+      jsRuntime: e.YTDLP_JS_RUNTIME ?? `node:${process.execPath}`,
     },
   };
 }

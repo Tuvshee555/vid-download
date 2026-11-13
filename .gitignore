@@ -5,6 +5,8 @@ out/
 coverage/
 *.tsbuildinfo
 next-env.d.ts
+apps/web/bin/
+.vercel
 .turbo/
 
 # secrets & local state — never commit
@@ -20,3 +22,4 @@ Thumbs.db
 .vscode/*
 !.vscode/extensions.json
 npm-debug.log*
+

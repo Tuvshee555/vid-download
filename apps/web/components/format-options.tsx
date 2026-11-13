@@ -1,12 +1,12 @@
 'use client';
 
 import { ChevronRight, Film, Music } from 'lucide-react';
-import { formatBytes, type MediaFormat, type MediaOption } from '@vd/shared';
+import { formatBytes, type MediaOption } from '@vd/shared';
 import { cn } from '@/lib/utils';
 
 interface FormatOptionsProps {
   options: MediaOption[];
-  onSelect: (format: MediaFormat) => void;
+  onSelect: (option: MediaOption) => void;
   disabled?: boolean;
 }
 
@@ -22,7 +22,7 @@ export function FormatOptions({ options, onSelect, disabled = false }: FormatOpt
         const details = [
           option.container.toUpperCase(),
           option.resolution,
-          option.sizeBytes != null ? formatBytes(option.sizeBytes) : null,
+          option.sizeBytes != null ? `~${formatBytes(option.sizeBytes)}` : null,
         ].filter((part): part is string => Boolean(part));
         const Icon = option.format === 'mp4' ? Film : Music;
 
@@ -31,7 +31,7 @@ export function FormatOptions({ options, onSelect, disabled = false }: FormatOpt
             <button
               type="button"
               disabled={disabled}
-              onClick={() => onSelect(option.format)}
+              onClick={() => onSelect(option)}
               className={cn(
                 'group flex w-full items-center gap-4 rounded-2xl border border-line-strong bg-surface p-4 text-left shadow-sm transition-colors',
                 'hover:border-brand-600 hover:bg-brand-50 disabled:pointer-events-none disabled:opacity-50',

@@ -54,7 +54,7 @@ describe('Downloader flow', () => {
     const { user, input } = mount();
 
     await user.type(input, IG);
-    await user.click(screen.getByRole('button', { name: /get download options/i }));
+    await user.click(screen.getByRole('button', { name: /^download$/i }));
 
     const formats = await screen.findByRole('list', { name: /available formats/i });
     expect(within(formats).getAllByRole('button')).toHaveLength(2);
@@ -78,7 +78,7 @@ describe('Downloader flow', () => {
     const { user, input } = mount();
 
     await user.type(input, YT);
-    await user.click(screen.getByRole('button', { name: /get download options/i }));
+    await user.click(screen.getByRole('button', { name: /^download$/i }));
 
     const notice = await screen.findByTestId('platform-notice');
     expect(notice).toHaveTextContent(/YouTube provides no API/);
@@ -98,7 +98,7 @@ describe('Downloader flow', () => {
     const { user, input } = mount();
 
     await user.type(input, IG);
-    await user.click(screen.getByRole('button', { name: /get download options/i }));
+    await user.click(screen.getByRole('button', { name: /^download$/i }));
 
     const panel = await screen.findByTestId('flow-error');
     expect(panel).toHaveTextContent('Instagram returned an error. Try again shortly.');

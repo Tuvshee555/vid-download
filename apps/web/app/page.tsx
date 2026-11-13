@@ -3,6 +3,7 @@ import { ServerCrash } from 'lucide-react';
 import { AppShell } from '@/components/app-shell';
 import { Downloader } from '@/components/downloader';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
+import { serverMode } from '@/lib/server/standalone';
 import { getSession } from '@/lib/session';
 
 export const dynamic = 'force-dynamic';
@@ -27,7 +28,7 @@ export default async function HomePage() {
 
   return (
     <AppShell signedIn>
-      <Downloader />
+      <Downloader mode={serverMode()} />
     </AppShell>
   );
 }

@@ -4,6 +4,7 @@
  */
 import { cookies } from 'next/headers';
 import { apiBaseUrl, SESSION_COOKIE } from '@/lib/bff';
+import { serverMode, standaloneSession } from '@/lib/server/standalone';
 
 export type SessionCheck =
   | { status: 'authenticated'; expiresAt: string }
@@ -13,6 +14,11 @@ export type SessionCheck =
 export async function getSession(): Promise<SessionCheck> {
   const token = (await cookies()).get(SESSION_COOKIE)?.value;
   if (!token) return { status: 'unauthenticated' };
+
+  if (serverMode() === 'standalone') {
+    const session = standaloneSession(token);
+    return session ? { status: 'authenticated', expiresAt: session.expiresAt.toISOString() } : { status: 'unauthenticated' };
+  }
 
   try {
     const response = await fetch(`${apiBaseUrl()}/v1/auth/session`, {

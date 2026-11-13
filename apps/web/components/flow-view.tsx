@@ -110,7 +110,7 @@ export function FlowView({ flow }: { flow: MediaFlow }) {
         <div className="space-y-5">
           {card}
           {state.job.result ? (
-            <ResultCard result={state.job.result} onRefreshLink={flow.refreshLink} onReset={flow.reset} />
+            <ResultCard result={state.job.result} onRefreshLink={flow.canRefreshLink ? flow.refreshLink : undefined} onReset={flow.reset} />
           ) : null}
         </div>
       );

@@ -9,14 +9,14 @@ describe('loadConfig', () => {
     expect(config.storage.driver).toBe('local');
     expect(config.limits.fileTtlMs).toBe(60 * 60_000);
     expect(config.limits.maxInputBytes).toBe(1024 * 1024 * 1024);
-    expect(config.platforms.youtubeApiKey).toBeUndefined();
+    expect(config.ytdlp.cookiesContent).toBeNull();
   });
 
   it('treats empty values like unset (so .env.example can list every key)', () => {
-    const config = loadConfig({ PORT: '', ACCESS_PASSWORD: '', YOUTUBE_API_KEY: '   ' });
+    const config = loadConfig({ PORT: '', ACCESS_PASSWORD: '', YTDLP_COOKIES: '   ' });
     expect(config.server.port).toBe(4000);
     expect(config.auth.password).toBeUndefined();
-    expect(config.platforms.youtubeApiKey).toBeUndefined();
+    expect(config.ytdlp.cookiesContent).toBeNull();
   });
 
   it('parses numbers, booleans and origin lists', () => {
@@ -38,7 +38,15 @@ describe('loadConfig', () => {
     expect(() => loadConfig({ PORT: 'abc' })).toThrowError(ConfigError);
     expect(() => loadConfig({ PORT: 'abc' })).toThrowError(/PORT/);
     expect(() => loadConfig({ SESSION_SECRET: 'too-short' })).toThrowError(/SESSION_SECRET/);
-    expect(() => loadConfig({ INSTAGRAM_GRAPH_VERSION: 'latest' })).toThrowError(/INSTAGRAM_GRAPH_VERSION/);
+    expect(() => loadConfig({ X264_PRESET: 'warp-speed' })).toThrowError(/X264_PRESET/);
+  });
+
+  it('treats FFPROBE_PATH=none as "inspect with ffmpeg" and defaults the yt-dlp settings', () => {
+    expect(loadConfig({ FFPROBE_PATH: 'none' }).ffmpeg.ffprobePath).toBeNull();
+    expect(loadConfig({}).ffmpeg.ffprobePath).toBe('ffprobe');
+    expect(loadConfig({}).ytdlp).toMatchObject({ binPath: 'yt-dlp', cookiesContent: null });
+    expect(loadConfig({}).ytdlp.jsRuntime).toMatch(/^node:/);
+    expect(loadConfig({}).ffmpeg.x264Preset).toBe('veryfast');
   });
 
   it('requires bucket credentials for the s3 driver', () => {

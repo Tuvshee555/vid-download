@@ -10,7 +10,8 @@ import type { FlowError } from '@/hooks/flow-reducer';
 
 interface ResultCardProps {
   result: JobResultView;
-  onRefreshLink: () => Promise<FlowError | null>;
+  /** Omitted where download links don't expire before the file does (standalone mode). */
+  onRefreshLink?: () => Promise<FlowError | null>;
   onReset: () => void;
 }
 
@@ -26,6 +27,7 @@ export function ResultCard({ result, onRefreshLink, onReset }: ResultCardProps) 
   async function refresh() {
     setRefreshing(true);
     setRefreshError(null);
+    if (!onRefreshLink) return;
     const error = await onRefreshLink();
     setRefreshing(false);
     if (error) setRefreshError(error.message);
@@ -64,8 +66,8 @@ export function ResultCard({ result, onRefreshLink, onReset }: ResultCardProps) 
           <p className="text-sm text-brand-800">Original quality — the video was not re-encoded.</p>
         ) : null}
         <p className="text-sm text-muted">
-          The file is deleted automatically around {formatClock(result.expiresAt)}. The download link itself is
-          short-lived — use “Refresh link” if it stops working.
+          The file is deleted automatically around {formatClock(result.expiresAt)}.
+          {onRefreshLink ? ' The download link itself is short-lived — use “Refresh link” if it stops working.' : ''}
         </p>
         {refreshError ? (
           <Alert variant="destructive">
@@ -80,10 +82,12 @@ export function ResultCard({ result, onRefreshLink, onReset }: ResultCardProps) 
             Download {result.format.toUpperCase()}
           </a>
         </Button>
-        <Button variant="secondary" size="lg" onClick={() => void refresh()} disabled={refreshing}>
-          {refreshing ? <Loader2 className="size-4 animate-spin motion-reduce:animate-none" aria-hidden /> : <RefreshCw className="size-4" aria-hidden />}
-          Refresh link
-        </Button>
+        {onRefreshLink ? (
+          <Button variant="secondary" size="lg" onClick={() => void refresh()} disabled={refreshing}>
+            {refreshing ? <Loader2 className="size-4 animate-spin motion-reduce:animate-none" aria-hidden /> : <RefreshCw className="size-4" aria-hidden />}
+            Refresh link
+          </Button>
+        ) : null}
         <Button variant="ghost" size="lg" onClick={onReset}>
           New download
         </Button>

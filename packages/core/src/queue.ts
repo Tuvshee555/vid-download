@@ -21,6 +21,8 @@ export type MediaJobSource =
 export interface MediaJobData {
   source: MediaJobSource;
   format: MediaFormat;
+  /** Max short-side resolution for MP4 link downloads; null = best (≤1080p). */
+  quality?: number | null;
   createdAt: string;
 }
 

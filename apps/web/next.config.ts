@@ -1,3 +1,4 @@
+import path from 'node:path';
 import type { NextConfig } from 'next';
 
 const securityHeaders = [
@@ -9,7 +10,15 @@ const securityHeaders = [
 ];
 
 const nextConfig: NextConfig = {
-  transpilePackages: ['@vd/shared'],
+  transpilePackages: ['@vd/shared', '@vd/core'],
+  // ffmpeg-static resolves its binary relative to its own folder: keep it un-bundled.
+  serverExternalPackages: ['ffmpeg-static'],
+  // Monorepo: trace files from the repository root so the hoisted node_modules are included.
+  outputFileTracingRoot: path.join(__dirname, '../..'),
+  // Ship the yt-dlp and ffmpeg binaries with the API functions that run them.
+  outputFileTracingIncludes: {
+    '/api/**/*': ['./bin/**/*', '../../node_modules/ffmpeg-static/ffmpeg', '../../node_modules/ffmpeg-static/package.json'],
+  },
   poweredByHeader: false,
   reactStrictMode: true,
   async headers() {

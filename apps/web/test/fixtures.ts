@@ -1,9 +1,10 @@
 import type { JobView, MediaOption, ResolveResponse } from '@vd/shared';
 
 export const MP4_OPTION: MediaOption = {
-  id: 'mp4',
+  id: 'mp4-720',
   format: 'mp4',
-  label: 'MP4 video',
+  quality: 720,
+  label: 'MP4 720p',
   container: 'mp4',
   resolution: null,
   sizeBytes: null,
@@ -13,6 +14,7 @@ export const MP4_OPTION: MediaOption = {
 export const MP3_OPTION: MediaOption = {
   id: 'mp3',
   format: 'mp3',
+  quality: null,
   label: 'MP3 audio',
   container: 'mp3',
   resolution: null,

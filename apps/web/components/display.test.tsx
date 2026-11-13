@@ -42,7 +42,7 @@ describe('FormatOptions', () => {
     const onSelect = vi.fn();
     render(<FormatOptions options={[MP4_OPTION, MP3_OPTION]} onSelect={onSelect} />);
     await userEvent.click(screen.getByRole('button', { name: /mp3 audio/i }));
-    expect(onSelect).toHaveBeenCalledExactlyOnceWith('mp3');
+    expect(onSelect).toHaveBeenCalledExactlyOnceWith(MP3_OPTION);
   });
 
   it('says so when there is nothing to offer instead of inventing options', () => {

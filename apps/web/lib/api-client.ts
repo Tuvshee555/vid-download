@@ -133,6 +133,63 @@ export function createJob(body: CreateJobRequest, signal?: AbortSignal): Promise
   return request<CreateJobResponse>('/api/jobs', { method: 'POST', body, signal });
 }
 
+/**
+ * Standalone mode: one streaming request does the whole conversion. The server sends one JobView
+ * per line (NDJSON) — queued, progress…, then completed or failed — and `onUpdate` gets each one.
+ */
+export async function convertStream(body: CreateJobRequest, onUpdate: (job: JobView) => void, signal?: AbortSignal): Promise<void> {
+  let response: Response;
+  try {
+    response = await fetch('/api/convert', {
+      method: 'POST',
+      credentials: 'same-origin',
+      cache: 'no-store',
+      headers: { accept: 'application/x-ndjson', 'content-type': 'application/json' },
+      body: JSON.stringify(body),
+      signal,
+    });
+  } catch (error) {
+    if (error instanceof DOMException && error.name === 'AbortError') throw error;
+    throw new ApiClientError('NETWORK_TIMEOUT', "Couldn't reach the server. Check your connection and try again.", { retryable: true, network: true });
+  }
+  if (!response.ok || !response.body) {
+    const error = await toError(response);
+    if (response.status === 401) unauthorizedHandler();
+    throw error;
+  }
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffered = '';
+  let finished = false;
+  const handleLine = (line: string) => {
+    if (!line.trim()) return;
+    const job = JSON.parse(line) as JobView;
+    if (job.status === 'completed' || job.status === 'failed' || job.status === 'expired') finished = true;
+    onUpdate(job);
+  };
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      buffered += decoder.decode(value, { stream: true });
+      let newline = buffered.indexOf('\n');
+      while (newline !== -1) {
+        handleLine(buffered.slice(0, newline));
+        buffered = buffered.slice(newline + 1);
+        newline = buffered.indexOf('\n');
+      }
+    }
+    handleLine(buffered + decoder.decode());
+  } catch (error) {
+    if (error instanceof DOMException && error.name === 'AbortError') throw error;
+    throw new ApiClientError('NETWORK_TIMEOUT', 'The connection dropped while converting. Please try again.', { retryable: true, network: true });
+  }
+  if (!finished) {
+    throw new ApiClientError('NETWORK_TIMEOUT', 'The conversion stopped before it finished (it may have taken too long). Try a lower quality or a shorter video.', { retryable: true });
+  }
+}
+
 export function getJob(id: string, signal?: AbortSignal): Promise<JobView> {
   return request<JobView>(`/api/jobs/${encodeURIComponent(id)}`, { signal });
 }

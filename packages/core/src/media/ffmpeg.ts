@@ -17,7 +17,8 @@ import { AppError } from '@vd/shared';
 
 export interface FfmpegPaths {
   ffmpegPath: string;
-  ffprobePath: string;
+  /** null where ffprobe isn't available (e.g. serverless): files are then inspected with ffmpeg itself. */
+  ffprobePath: string | null;
 }
 
 export interface ProbeResult {
@@ -58,33 +59,47 @@ const probeSchema = z.object({
     .default([]),
 });
 
-interface RunOptions {
+export interface RunOptions {
   timeoutMs: number;
   /** Called with each line of stdout. */
   onStdoutLine?: (line: string) => void;
   maxCapturedBytes?: number;
+  /** Kills the child when aborted (e.g. the browser disconnected). */
+  signal?: AbortSignal;
+  /** How much stderr to keep for diagnostics. */
+  stderrTailBytes?: number;
 }
 
-interface RunResult {
+export interface RunResult {
   code: number | null;
   stdout: string;
   stderrTail: string;
   timedOut: boolean;
+  aborted: boolean;
 }
 
-function run(binary: string, args: string[], options: RunOptions): Promise<RunResult> {
+/** Spawn a binary with an argument array (never a shell), a hard timeout and optional abort. */
+export function runProcess(binary: string, args: string[], options: RunOptions): Promise<RunResult> {
   return new Promise((resolve, reject) => {
     const child = spawn(binary, args, { stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
     const cap = options.maxCapturedBytes ?? 2 * 1024 * 1024;
+    const tailBytes = options.stderrTailBytes ?? 8192;
     let stdout = '';
     let stderrTail = '';
     let buffered = '';
     let timedOut = false;
+    let aborted = false;
 
     const timer = setTimeout(() => {
       timedOut = true;
       child.kill('SIGKILL');
     }, options.timeoutMs);
+    const onAbort = () => {
+      aborted = true;
+      child.kill('SIGKILL');
+    };
+    if (options.signal?.aborted) onAbort();
+    options.signal?.addEventListener('abort', onAbort, { once: true });
 
     child.stdout.setEncoding('utf8');
     child.stdout.on('data', (chunk: string) => {
@@ -101,11 +116,12 @@ function run(binary: string, args: string[], options: RunOptions): Promise<RunRe
     });
     child.stderr.setEncoding('utf8');
     child.stderr.on('data', (chunk: string) => {
-      stderrTail = (stderrTail + chunk).slice(-8192);
+      stderrTail = (stderrTail + chunk).slice(-tailBytes);
     });
 
     child.on('error', (error: NodeJS.ErrnoException) => {
       clearTimeout(timer);
+      options.signal?.removeEventListener('abort', onAbort);
       if (error.code === 'ENOENT') {
         reject(new AppError('INTERNAL', `${binary} is not installed or not on PATH.`, { retryable: false, cause: error }));
       } else {
@@ -114,12 +130,71 @@ function run(binary: string, args: string[], options: RunOptions): Promise<RunRe
     });
     child.on('close', (code) => {
       clearTimeout(timer);
-      resolve({ code, stdout, stderrTail, timedOut });
+      options.signal?.removeEventListener('abort', onAbort);
+      if (buffered.trim() && options.onStdoutLine) options.onStdoutLine(buffered.trim());
+      resolve({ code, stdout, stderrTail, timedOut, aborted });
     });
   });
 }
 
+const run = runProcess;
+
+function assertAllowedFormat(formatName: string): void {
+  const formats = formatName.split(',').map((name) => name.trim());
+  if (!formats.some((name) => ALLOWED_FORMATS.has(name))) {
+    throw new AppError('UNSUPPORTED_MEDIA', `This file type (${formatName || 'unknown'}) isn't supported.`);
+  }
+}
+
+/**
+ * Inspect a file with `ffmpeg -i` when ffprobe isn't available. ffmpeg prints the same
+ * container/stream summary to stderr; only the fields the planners need are read.
+ */
+export async function probeWithFfmpeg(path: string, ffmpegPath: string, timeoutMs = 30_000): Promise<ProbeResult> {
+  // No output file → ffmpeg exits 1 after printing the input summary. That is expected.
+  const result = await run(ffmpegPath, ['-hide_banner', '-nostdin', '-protocol_whitelist', 'file,pipe', '-i', path], {
+    timeoutMs,
+    stderrTailBytes: 64 * 1024,
+  });
+  if (result.timedOut) throw new AppError('PROCESSING_FAILED', 'Reading the file took too long.');
+  const text = result.stderrTail;
+  const input = /Input #0, ([^\s]+), from/.exec(text);
+  if (!input?.[1]) throw new AppError('UNSUPPORTED_MEDIA', "This file couldn't be read as audio or video.", { cause: text.slice(-500) });
+  const formatName = input[1].replace(/,$/, '');
+  assertAllowedFormat(formatName);
+
+  const durationMatch = /Duration: (\d+):(\d{2}):(\d{2}(?:\.\d+)?)/.exec(text);
+  const durationSeconds = durationMatch
+    ? Number(durationMatch[1]) * 3600 + Number(durationMatch[2]) * 60 + Number(durationMatch[3])
+    : null;
+
+  let video: ProbeResult['video'] = null;
+  let audio: ProbeResult['audio'] = null;
+  for (const line of text.split(/\r?\n/)) {
+    const stream = /Stream #\d+:\d+.*?: (Video|Audio): ([A-Za-z0-9_]+)(.*)$/.exec(line);
+    if (!stream) continue;
+    const [, kind, codec = 'unknown', rest = ''] = stream;
+    if (kind === 'Video' && !video && !/attached pic/.test(line)) {
+      const size = /\b(\d{2,5})x(\d{2,5})\b/.exec(rest);
+      video = { codec, width: Number(size?.[1] ?? 0), height: Number(size?.[2] ?? 0) };
+    } else if (kind === 'Audio' && !audio) {
+      const bitrate = /(\d+) kb\/s/.exec(rest);
+      audio = { codec, bitRateKbps: bitrate ? Number(bitrate[1]) : null };
+    }
+  }
+
+  return {
+    formatName,
+    durationSeconds: durationSeconds && durationSeconds > 0 ? durationSeconds : null,
+    sizeBytes: null,
+    video,
+    audio,
+    title: null,
+  };
+}
+
 export async function probeFile(path: string, paths: FfmpegPaths, timeoutMs = 30_000): Promise<ProbeResult> {
+  if (!paths.ffprobePath) return probeWithFfmpeg(path, paths.ffmpegPath, timeoutMs);
   const result = await run(
     paths.ffprobePath,
     ['-v', 'error', '-protocol_whitelist', 'file,pipe', '-print_format', 'json', '-show_format', '-show_streams', '-i', path],
@@ -137,10 +212,7 @@ export async function probeFile(path: string, paths: FfmpegPaths, timeoutMs = 30
     throw new AppError('UNSUPPORTED_MEDIA', "This file couldn't be read as audio or video.", { cause: error });
   }
 
-  const formats = parsed.format.format_name.split(',').map((name) => name.trim());
-  if (!formats.some((name) => ALLOWED_FORMATS.has(name))) {
-    throw new AppError('UNSUPPORTED_MEDIA', `This file type (${parsed.format.format_name || 'unknown'}) isn't supported.`);
-  }
+  assertAllowedFormat(parsed.format.format_name);
 
   // Cover art in MP3/M4A shows up as a "video" stream flagged attached_pic — it is not a video track.
   const videoStream = parsed.streams.find((s) => s.codec_type === 'video' && s.disposition?.attached_pic !== 1);
@@ -215,14 +287,27 @@ export function planMp3(probe: ProbeResult): Mp3Plan {
 
 const BASE_ARGS = ['-hide_banner', '-nostdin', '-loglevel', 'error', '-protocol_whitelist', 'file,pipe', '-nostats', '-progress', 'pipe:1', '-y'];
 
-export function buildMp4Args(input: string, output: string, plan: Mp4Plan): string[] {
+export interface EncodeOptions {
+  /** x264 speed/size trade-off. "veryfast" keeps serverless conversions well inside time limits. */
+  x264Preset?: string;
+  /** 18 ≈ visually lossless, 20 is a good default, higher = smaller. */
+  crf?: number;
+}
+
+export function buildMp4Args(input: string, output: string, plan: Mp4Plan, encode: EncodeOptions = {}): string[] {
   const args = [...BASE_ARGS, '-i', input, '-map', '0:v:0'];
   if (plan.audio !== 'none') args.push('-map', '0:a:0');
   if (plan.video === 'copy') {
     args.push('-c:v', 'copy');
   } else {
     // Even dimensions are required by yuv420p H.264.
-    args.push('-c:v', 'libx264', '-preset', 'medium', '-crf', '18', '-pix_fmt', 'yuv420p', '-vf', 'scale=trunc(iw/2)*2:trunc(ih/2)*2');
+    args.push(
+      '-c:v', 'libx264',
+      '-preset', encode.x264Preset ?? 'veryfast',
+      '-crf', String(encode.crf ?? 20),
+      '-pix_fmt', 'yuv420p',
+      '-vf', 'scale=trunc(iw/2)*2:trunc(ih/2)*2',
+    );
   }
   if (plan.audio === 'copy') args.push('-c:a', 'copy');
   if (plan.audio === 'encode') args.push('-c:a', 'aac', '-b:a', '192k');
@@ -251,6 +336,7 @@ export interface ConvertOptions {
   /** Fraction 0–1 of the media processed so far (only when the duration is known). */
   onProgress?: (fraction: number) => void;
   durationSeconds: number | null;
+  signal?: AbortSignal;
 }
 
 export async function runFfmpeg(args: string[], options: ConvertOptions): Promise<void> {
@@ -263,7 +349,9 @@ export async function runFfmpeg(args: string[], options: ConvertOptions): Promis
       if (match?.[1]) options.onProgress(Math.min(1, Number(match[1]) / 1_000_000 / total));
     },
     maxCapturedBytes: 64 * 1024,
+    ...(options.signal ? { signal: options.signal } : {}),
   });
+  if (result.aborted) throw new AppError('PROCESSING_FAILED', 'Processing was cancelled.', { retryable: false });
   if (result.timedOut) {
     throw new AppError('PROCESSING_FAILED', 'Processing took too long and was stopped.', { retryable: false });
   }

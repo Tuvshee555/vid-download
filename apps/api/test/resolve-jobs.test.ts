@@ -2,7 +2,8 @@ import { randomUUID } from 'node:crypto';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
 import { encodeFailure } from '@vd/core';
 import { AppError, type JobResultRecord } from '@vd/shared';
-import { createTestContext, fakeHttp, type TestContext } from './helpers';
+import { vi } from 'vitest';
+import { createTestContext, reelInfo, type TestContext } from './helpers';
 
 describe('POST /v1/resolve — input validation', () => {
   let ctx: TestContext;
@@ -48,70 +49,87 @@ describe('POST /v1/resolve — input validation', () => {
     expect(text.statusCode).toBe(400);
   });
 
-  it('shows YouTube details but never a download option', async () => {
-    const response = await resolve({ url: 'https://www.youtube.com/watch?v=dQw4w9WgXcQ' });
+  it('resolves a YouTube link to real quality options built from yt-dlp metadata', async () => {
+    const response = await resolve({ url: 'https://youtu.be/dQw4w9WgXcQ?si=tracking' });
     expect(response.statusCode).toBe(200);
-    const body = response.json();
-    expect(body).toMatchObject({
+    expect(response.json()).toMatchObject({
       platform: 'youtube',
       mediaId: 'dQw4w9WgXcQ',
       canonicalUrl: 'https://www.youtube.com/watch?v=dQw4w9WgXcQ',
-      metadata: { title: 'Some video' },
-      uploadEnabled: true,
-      availability: { status: 'unavailable', reason: { code: 'UNAUTHORIZED_SOURCE' } },
+      metadata: { title: 'Some video', author: 'Some channel' },
+      availability: { status: 'available' },
     });
-    expect(JSON.stringify(body)).not.toContain('"options"');
+    const ids = (response.json() as { availability: { options: Array<{ id: string }> } }).availability.options.map((o) => o.id);
+    expect(ids).toEqual(['mp4-720', 'mp4-360', 'mp3']);
   });
 
-  it("offers MP4/MP3 for the connected Instagram account's own reel", async () => {
-    const response = await resolve({ url: 'https://www.instagram.com/reel/Cabc123XYZ/?igsh=tracking' });
-    expect(response.statusCode).toBe(200);
-    const body = response.json() as { availability: { status: string; options: Array<{ format: string }> }; metadata: { title: string; author: string } };
-    expect(body.availability.status).toBe('available');
-    expect(body.availability.options.map((o) => o.format)).toEqual(['mp4', 'mp3']);
-    expect(body.metadata).toMatchObject({ title: 'Launch day', author: 'myshop' });
+  it('resolves Instagram, Facebook and TikTok links (incl. share/short links) via canonical URLs', async () => {
+    const fetchInfo = vi.fn(async () => reelInfo);
+    const local = await createTestContext({}, fetchInfo);
+    try {
+      for (const [url, canonical] of [
+        ['https://www.instagram.com/reel/Cabc123XYZ/?igsh=tracking', 'https://www.instagram.com/reel/Cabc123XYZ/'],
+        ['https://fb.watch/abcDEF123/', 'https://fb.watch/abcDEF123/'],
+        ['https://www.facebook.com/share/r/AbC123xyz/', 'https://www.facebook.com/share/r/AbC123xyz/'],
+        ['https://vm.tiktok.com/ZMabc123/', 'https://vm.tiktok.com/ZMabc123/'],
+        ['https://www.tiktok.com/@realmadrid/video/7707305867162570017?lang=en', 'https://www.tiktok.com/@realmadrid/video/7707305867162570017'],
+      ]) {
+        const response = await local.app.inject({ method: 'POST', url: '/v1/resolve', headers: local.auth, payload: { url } });
+        expect(response.statusCode, url).toBe(200);
+        expect(response.json()).toMatchObject({ canonicalUrl: canonical, availability: { status: 'available' } });
+        expect(fetchInfo).toHaveBeenLastCalledWith(canonical, expect.any(String), expect.anything());
+      }
+      const body = (await local.app.inject({ method: 'POST', url: '/v1/resolve', headers: local.auth, payload: { url: 'https://www.instagram.com/reel/Cabc123XYZ/' } })).json() as { metadata: { title: string } };
+      expect(body.metadata.title).toBe('Launch day');
+    } finally {
+      await local.cleanup();
+    }
   });
 
-  it('refuses to offer someone else\'s Instagram post', async () => {
+  it('explains private or removed videos instead of failing', async () => {
     const response = await resolve({ url: 'https://www.instagram.com/reel/NotMyReel99/' });
-    expect(response.json()).toMatchObject({ availability: { status: 'unavailable', reason: { code: 'UNAUTHORIZED_SOURCE' } } });
+    expect(response.statusCode).toBe(200);
+    expect(response.json()).toMatchObject({ availability: { status: 'unavailable', reason: { code: 'PRIVATE_CONTENT', message: expect.stringMatching(/private/) } } });
   });
 
-  it('says Facebook is not configured when it has no token', async () => {
-    const response = await resolve({ url: 'https://www.facebook.com/watch/?v=1234567890123' });
-    expect(response.json()).toMatchObject({ availability: { status: 'unavailable', reason: { code: 'NOT_CONFIGURED' } } });
-  });
-
-  it('surfaces platform API failures as a retryable 502 without leaking the token', async () => {
-    const failing = await createTestContext(
+  it('explains a platform that blocks the server (YouTube bot check) with a way forward', async () => {
+    const blocked = await createTestContext(
       {},
-      fakeHttp(() => ({ status: 500, body: { error: { code: 2, message: 'internal ig-token' } } })),
+      vi.fn(async () => Promise.reject(new AppError('PLATFORM_API_ERROR', 'YouTube is blocking this server.', { retryable: false, guidance: ['Run MediaDock on your own computer.'] }))),
     );
     try {
-      const response = await failing.app.inject({
-        method: 'POST',
-        url: '/v1/resolve',
-        headers: failing.auth,
-        payload: { url: 'https://www.instagram.com/reel/Cabc123XYZ/' },
+      const response = await blocked.app.inject({ method: 'POST', url: '/v1/resolve', headers: blocked.auth, payload: { url: 'https://youtu.be/dQw4w9WgXcQ' } });
+      expect(response.statusCode).toBe(200);
+      expect(response.json()).toMatchObject({
+        availability: { status: 'unavailable', reason: { code: 'PLATFORM_API_ERROR', guidance: ['Run MediaDock on your own computer.'] } },
       });
+    } finally {
+      await blocked.cleanup();
+    }
+  });
+
+  it('surfaces transient platform failures as a retryable 502 without leaking raw tool output', async () => {
+    const failing = await createTestContext(
+      {},
+      vi.fn(async () => Promise.reject(new AppError('PLATFORM_API_ERROR', 'Could not get this video from Instagram. Please try again later.', { retryable: true, cause: 'ERROR: [Instagram] secret raw stderr' }))),
+    );
+    try {
+      const response = await failing.app.inject({ method: 'POST', url: '/v1/resolve', headers: failing.auth, payload: { url: 'https://www.instagram.com/reel/Cabc123XYZ/' } });
       expect(response.statusCode).toBe(502);
       expect(response.json()).toMatchObject({ error: { code: 'PLATFORM_API_ERROR', retryable: true } });
-      expect(response.body).not.toContain('ig-token');
+      expect(response.body).not.toContain('secret raw stderr');
     } finally {
       await failing.cleanup();
     }
   });
 
-  it('lists platforms honestly, including what each can and cannot do', async () => {
+  it('lists all four platforms with an honest summary', async () => {
     const response = await ctx.app.inject({ method: 'GET', url: '/v1/platforms', headers: ctx.auth });
     const body = response.json() as { platforms: Array<{ platform: string; configured: boolean; capability: string; summary: string }>; limits: Record<string, number> };
-    const byName = Object.fromEntries(body.platforms.map((p) => [p.platform, p]));
-    expect(byName.youtube).toMatchObject({ capability: 'metadata-only', configured: true });
-    expect(byName.youtube?.summary).toMatch(/Terms of Service/);
-    expect(byName.instagram).toMatchObject({ capability: 'own-media', configured: true });
-    expect(byName.facebook).toMatchObject({ capability: 'own-media', configured: false });
+    expect(body.platforms.map((p) => p.platform)).toEqual(['youtube', 'instagram', 'facebook', 'tiktok']);
+    expect(body.platforms.every((p) => p.capability === 'public-links' && p.configured)).toBe(true);
+    expect(body.platforms.find((p) => p.platform === 'youtube')?.summary).toMatch(/blocks many cloud servers/);
     expect(body.limits.maxUploadBytes).toBeGreaterThan(0);
-    expect(JSON.stringify(body)).not.toContain('ig-token');
   });
 });
 
@@ -139,11 +157,24 @@ describe('jobs', () => {
     expect(ctx.queue.jobs.size).toBe(0);
   });
 
-  it('refuses a YouTube job and creates nothing (no permitted download route)', async () => {
-    const response = await createJob({ source: 'url', url: 'https://www.youtube.com/watch?v=dQw4w9WgXcQ', format: 'mp4' });
+  it('queues a YouTube MP4 job with the chosen quality', async () => {
+    const response = await createJob({ source: 'url', url: 'https://www.youtube.com/watch?v=dQw4w9WgXcQ', format: 'mp4', quality: 720 });
+    expect(response.statusCode).toBe(202);
+    const job = ctx.queue.jobs.get((response.json() as { id: string }).id)!;
+    expect(job.data).toMatchObject({ format: 'mp4', quality: 720, source: { platform: 'youtube', canonicalUrl: 'https://www.youtube.com/watch?v=dQw4w9WgXcQ' } });
+    ctx.queue.jobs.clear();
+  });
+
+  it('refuses a job for a private video and creates nothing', async () => {
+    const response = await createJob({ source: 'url', url: 'https://www.instagram.com/reel/NotMyReel99/', format: 'mp4' });
     expect(response.statusCode).toBe(403);
-    expect(response.json()).toMatchObject({ error: { code: 'UNAUTHORIZED_SOURCE', guidance: expect.any(Array) } });
+    expect(response.json()).toMatchObject({ error: { code: 'PRIVATE_CONTENT' } });
     expect(ctx.queue.jobs.size).toBe(0);
+  });
+
+  it('rejects an out-of-range quality', async () => {
+    const response = await createJob({ source: 'url', url: 'https://www.youtube.com/watch?v=dQw4w9WgXcQ', format: 'mp4', quality: 99999 });
+    expect(response.statusCode).toBe(400);
   });
 
   it('rejects private/unsupported URLs before any work is queued', async () => {

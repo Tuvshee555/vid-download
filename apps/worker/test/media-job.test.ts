@@ -1,100 +1,45 @@
-import { createServer, type Server } from 'node:http';
-import type { AddressInfo } from 'node:net';
-import { createReadStream } from 'node:fs';
 import { copyFile, mkdtemp, readdir, rm, stat } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { AppError, detectUrl, type JobStage, type Platform } from '@vd/shared';
+import { afterAll, beforeAll, describe, expect, it, vi } from 'vitest';
+import { AppError, type JobStage } from '@vd/shared';
 import {
   LocalStorage,
-  UNSAFE_allowLoopbackGuard,
-  downloadToFile,
+  createAdapters,
   loadConfig,
+  probeFile,
   silentLogger,
   uploadKey,
-  type AdapterRegistry,
   type AppConfig,
   type MediaJobData,
-  type PlatformAdapter,
 } from '@vd/core';
+import { makeFixtures, type Fixtures } from '../../../packages/core/src/media/test-fixtures';
 import { processMediaJob, type ProcessorDeps } from '../src/processors/media-job';
-import { probeFile } from '../src/services/ffmpeg';
-import { makeFixtures, type Fixtures } from './fixtures';
 
 const UPLOAD_ID = '11111111-2222-4333-8444-555555555555';
-
-class StubAdapter implements PlatformAdapter {
-  readonly displayName: string;
-  constructor(
-    readonly platform: Platform,
-    private readonly source: () => ReturnType<PlatformAdapter['getSource']>,
-  ) {
-    this.displayName = platform;
-  }
-  describe() {
-    return { configured: true, capability: 'own-media' as const, summary: 'stub adapter for tests' };
-  }
-  validate(rawUrl: string) {
-    const detection = detectUrl(rawUrl);
-    if (!detection.ok) throw new AppError(detection.code);
-    return detection;
-  }
-  resolve(): never {
-    throw new Error('not used by the worker');
-  }
-  getSource() {
-    return this.source();
-  }
-}
 
 describe('processMediaJob', () => {
   let root: string;
   let fx: Fixtures;
-  let server: Server;
-  let serverUrl: string;
-  let servedFile: string;
 
   beforeAll(async () => {
     root = await mkdtemp(join(tmpdir(), 'vd-job-test-root-'));
     fx = await makeFixtures(join(root, 'fixtures'));
-    servedFile = fx.h264Aac;
-    server = createServer((req, res) => {
-      if (req.url === '/video.mp4') {
-        res.writeHead(200, { 'content-type': 'video/mp4' });
-        createReadStream(servedFile).pipe(res);
-      } else if (req.url === '/page.html') {
-        res.writeHead(200, { 'content-type': 'text/html' }).end('<html>login</html>');
-      } else {
-        res.writeHead(404).end();
-      }
-    });
-    await new Promise<void>((resolve) => server.listen(0, '127.0.0.1', resolve));
-    serverUrl = `http://127.0.0.1:${(server.address() as AddressInfo).port}`;
   }, 120_000);
 
-  afterAll(async () => {
-    await new Promise<void>((resolve) => server.close(() => resolve()));
-    await rm(root, { recursive: true, force: true });
-  });
+  afterAll(() => rm(root, { recursive: true, force: true }));
 
-  async function setup(env: Record<string, string> = {}, sourceAdapter?: () => ReturnType<PlatformAdapter['getSource']>) {
+  async function setup(env: Record<string, string> = {}, acquireLink?: ProcessorDeps['acquireLink']) {
     const storageDir = await mkdtemp(join(root, 'store-'));
     const config: AppConfig = loadConfig({ NODE_ENV: 'test', STORAGE_LOCAL_DIR: storageDir, ...env });
     const storage = new LocalStorage({ dir: storageDir });
-    const fallback = () => Promise.reject(new AppError('UNAUTHORIZED_SOURCE'));
-    const adapters: AdapterRegistry = {
-      youtube: new StubAdapter('youtube', () => Promise.reject(new AppError('UNAUTHORIZED_SOURCE', 'No permitted route.'))),
-      instagram: new StubAdapter('instagram', sourceAdapter ?? fallback),
-      facebook: new StubAdapter('facebook', fallback),
-    };
     const stages: Array<[JobStage, number]> = [];
     const deps: ProcessorDeps = {
       config,
       storage,
-      adapters,
+      adapters: createAdapters(config, { fetchInfo: async () => ({}) }),
       log: silentLogger,
-      download: (url, dest, options) => downloadToFile(url, dest, { ...options, guard: UNSAFE_allowLoopbackGuard }),
+      ...(acquireLink ? { acquireLink } : {}),
     };
     const report = (stage: JobStage, percent: number) => void stages.push([stage, percent]);
     const putUpload = async (file: string, id = UPLOAD_ID) => {
@@ -129,20 +74,16 @@ describe('processMediaJob', () => {
     expect(result.sizeBytes).toBeGreaterThan(10_000);
     expect(result.durationSeconds).toBeGreaterThan(1.5);
     expect(Date.parse(result.expiresAt)).toBeGreaterThan(Date.now() + 50 * 60_000);
+    expect((await ctx.storage.head(result.storageKey))?.size).toBe(result.sizeBytes);
+    expect(await ctx.storage.head(uploadKey(UPLOAD_ID))).toBeNull();
+    expect(await leftoverWorkspaces()).toBe(before);
 
-    const stored = await ctx.storage.head(result.storageKey);
-    expect(stored?.size).toBe(result.sizeBytes);
-    expect(await ctx.storage.head(uploadKey(UPLOAD_ID))).toBeNull(); // upload removed after success
-    expect(await leftoverWorkspaces()).toBe(before); // temp files removed
-
-    const stageNames = ctx.stages.map(([stage]) => stage);
-    expect(stageNames).toEqual(expect.arrayContaining(['resolving', 'downloading', 'probing', 'converting', 'uploading']));
     const percents = ctx.stages.map(([, percent]) => percent);
-    expect([...percents].sort((a, b) => a - b)).toEqual(percents); // monotonic
-    expect(Math.max(...percents)).toBeLessThanOrEqual(100);
+    expect(ctx.stages.map(([stage]) => stage)).toEqual(expect.arrayContaining(['resolving', 'downloading', 'probing', 'converting', 'uploading']));
+    expect([...percents].sort((a, b) => a - b)).toEqual(percents);
   });
 
-  it('keeps the original H.264 stream for MP4 (lossless) and reports the real resolution', async () => {
+  it('keeps the original H.264 stream for MP4 and reports the real resolution', async () => {
     const ctx = await setup();
     await ctx.putUpload(fx.h264Aac);
     const result = await processMediaJob('job-lossless1', uploadJob('mp4', 'clip.mp4'), ctx.deps, ctx.report);
@@ -156,6 +97,13 @@ describe('processMediaJob', () => {
     expect(result).toMatchObject({ filename: 'web.mp4', losslessVideo: false, resolution: '320×240' });
   });
 
+  it('works without ffprobe (serverless mode) too', async () => {
+    const ctx = await setup({ FFPROBE_PATH: 'none' });
+    await ctx.putUpload(fx.vp9Opus);
+    const result = await processMediaJob('job-noprobe01', uploadJob('mp4', 'web.webm'), ctx.deps, ctx.report);
+    expect(result).toMatchObject({ losslessVideo: false, resolution: '320×240' });
+  });
+
   it('rejects the wrong kind of media with a clear reason', async () => {
     const ctx = await setup();
     await ctx.putUpload(fx.audioOnlyM4a);
@@ -163,7 +111,6 @@ describe('processMediaJob', () => {
       code: 'UNSUPPORTED_MEDIA',
       message: expect.stringMatching(/no video track/i),
     });
-
     const silent = await setup();
     await silent.putUpload(fx.videoOnly);
     await expect(processMediaJob('job-silent-mp3', uploadJob('mp3', 'silent.mp4'), silent.deps, silent.report)).rejects.toMatchObject({
@@ -183,16 +130,18 @@ describe('processMediaJob', () => {
     expect(await leftoverWorkspaces()).toBe(before);
   });
 
-  it('refuses media longer than the configured limit', async () => {
-    const ctx = await setup({ MAX_DURATION_MINUTES: '0.01' }); // 0.6 s
-    await ctx.putUpload(fx.h264Aac);
-    await expect(processMediaJob('job-too-long1', uploadJob('mp3'), ctx.deps, ctx.report)).rejects.toMatchObject({ code: 'FILE_TOO_LARGE' });
-  });
+  it('enforces duration, size and time limits', async () => {
+    const long = await setup({ MAX_DURATION_MINUTES: '0.01' });
+    await long.putUpload(fx.h264Aac);
+    await expect(processMediaJob('job-too-long1', uploadJob('mp3'), long.deps, long.report)).rejects.toMatchObject({ code: 'FILE_TOO_LARGE' });
 
-  it('refuses inputs larger than the size limit before processing', async () => {
-    const ctx = await setup({ MAX_INPUT_MB: '0.001' }); // ~1 KB
-    await ctx.putUpload(fx.h264Aac);
-    await expect(processMediaJob('job-too-big001', uploadJob('mp3'), ctx.deps, ctx.report)).rejects.toMatchObject({ code: 'FILE_TOO_LARGE' });
+    const big = await setup({ MAX_INPUT_MB: '0.001' });
+    await big.putUpload(fx.h264Aac);
+    await expect(processMediaJob('job-too-big001', uploadJob('mp3'), big.deps, big.report)).rejects.toMatchObject({ code: 'FILE_TOO_LARGE' });
+
+    const slow = await setup({ PROCESSING_TIMEOUT_MINUTES: '0.0001' });
+    await slow.putUpload(fx.vp9Opus);
+    await expect(processMediaJob('job-timeout01', uploadJob('mp4', 'a.webm'), slow.deps, slow.report)).rejects.toMatchObject({ code: 'PROCESSING_FAILED', retryable: false });
   });
 
   it('reports a missing upload as NOT_FOUND', async () => {
@@ -200,66 +149,64 @@ describe('processMediaJob', () => {
     await expect(processMediaJob('job-missing01', uploadJob('mp3'), ctx.deps, ctx.report)).rejects.toMatchObject({ code: 'NOT_FOUND' });
   });
 
-  it('stops FFmpeg that runs past the processing timeout', async () => {
-    const ctx = await setup({ PROCESSING_TIMEOUT_MINUTES: '0.0001' });
-    await ctx.putUpload(fx.vp9Opus);
-    await expect(processMediaJob('job-timeout01', uploadJob('mp4', 'a.webm'), ctx.deps, ctx.report)).rejects.toMatchObject({ code: 'PROCESSING_FAILED', retryable: false });
-  });
-
-  describe('platform source (authorised URL → download → convert)', () => {
-    const platformJob = (format: 'mp4' | 'mp3'): MediaJobData => ({
-      source: { kind: 'platform', platform: 'instagram', canonicalUrl: 'https://www.instagram.com/reel/Cabc123XYZ/', mediaId: 'Cabc123XYZ' },
+  describe('link source (yt-dlp download → convert)', () => {
+    const linkJob = (format: 'mp4' | 'mp3', quality: number | null = null): MediaJobData => ({
+      source: { kind: 'platform', platform: 'tiktok', canonicalUrl: 'https://www.tiktok.com/@realmadrid/video/7707305867162570017', mediaId: '7707305867162570017' },
       format,
+      quality,
       createdAt: new Date().toISOString(),
     });
 
-    it('downloads the authorised file, names the output after the post and converts it', async () => {
-      servedFile = fx.h264Aac;
-      const ctx = await setup({}, async () => ({
-        url: `${serverUrl}/video.mp4`,
-        allowedHostSuffixes: ['127.0.0.1'],
-        metadata: { title: 'Launch day: the "big" one?', author: 'myshop', thumbnailUrl: null, durationSeconds: null },
-      }));
-      const result = await processMediaJob('job-platform01', platformJob('mp3'), ctx.deps, ctx.report);
-      expect(result.filename).toBe('Launch day the big one.mp3'); // sanitised
-      expect(ctx.stages.some(([stage]) => stage === 'downloading')).toBe(true);
+    /** Stands in for yt-dlp: "downloads" a fixture into the job's workspace. */
+    const fakeAcquire = (fixture: () => string, title: string | null) =>
+      vi.fn<NonNullable<ProcessorDeps['acquireLink']>>(async (source, _request, dir) => {
+        const path = join(dir, 'input.mp4');
+        await copyFile(fixture(), path);
+        return { path, titleHint: title, fallbackName: `${source.platform}-${source.mediaId}` };
+      });
+
+    it('downloads with the requested quality, names the file after the post and keeps H.264 untouched', async () => {
+      const acquire = fakeAcquire(() => fx.h264Aac, 'Another training session completed! #RealMadrid');
+      const ctx = await setup({}, acquire);
+      const result = await processMediaJob('job-link00001', linkJob('mp4', 720), ctx.deps, ctx.report);
+      expect(acquire).toHaveBeenCalledWith(
+        expect.objectContaining({ platform: 'tiktok', canonicalUrl: 'https://www.tiktok.com/@realmadrid/video/7707305867162570017' }),
+        { format: 'mp4', quality: 720 },
+        expect.any(String),
+        expect.any(Object),
+        expect.any(Function),
+      );
+      expect(result).toMatchObject({ filename: 'Another training session completed! #RealMadrid.mp4', losslessVideo: true });
       expect((await ctx.storage.head(result.storageKey))?.size).toBe(result.sizeBytes);
     });
 
+    it('never passes a quality for MP3', async () => {
+      const acquire = fakeAcquire(() => fx.h264Aac, 'x');
+      const ctx = await setup({}, acquire);
+      await processMediaJob('job-link00002', linkJob('mp3', 720), ctx.deps, ctx.report);
+      expect(acquire.mock.calls[0]?.[1]).toEqual({ format: 'mp3', quality: null });
+    });
+
     it('falls back to a platform-based file name when there is no title', async () => {
-      const ctx = await setup({}, async () => ({ url: `${serverUrl}/video.mp4`, allowedHostSuffixes: ['127.0.0.1'], metadata: null }));
-      const result = await processMediaJob('job-platform02', platformJob('mp4'), ctx.deps, ctx.report);
-      expect(result.filename).toBe('instagram-Cabc123XYZ.mp4');
+      const ctx = await setup({}, fakeAcquire(() => fx.h264Aac, null));
+      const result = await processMediaJob('job-link00003', linkJob('mp4'), ctx.deps, ctx.report);
+      expect(result.filename).toBe('tiktok-7707305867162570017.mp4');
     });
 
-    it('never downloads from a host the adapter did not authorise', async () => {
-      const ctx = await setup({}, async () => ({ url: `${serverUrl}/video.mp4`, allowedHostSuffixes: ['cdninstagram.com'], metadata: null }));
-      await expect(processMediaJob('job-platform03', platformJob('mp4'), ctx.deps, ctx.report)).rejects.toMatchObject({ code: 'BLOCKED_ADDRESS' });
+    it('re-encodes non-H.264 downloads (e.g. Facebook VP9) so the MP4 plays everywhere', async () => {
+      const ctx = await setup({}, fakeAcquire(() => fx.vp9Opus, 'Facebook clip'));
+      const result = await processMediaJob('job-link00004', linkJob('mp4'), ctx.deps, ctx.report);
+      expect(result.losslessVideo).toBe(false);
+      const copy = join(ctx.storageDir, 'check.mp4');
+      await copyFile(ctx.storage.pathFor(result.storageKey), copy);
+      expect((await probeFile(copy, ctx.config.ffmpeg)).video?.codec).toBe('h264');
     });
 
-    it('rejects a web page served in place of media', async () => {
-      const ctx = await setup({}, async () => ({ url: `${serverUrl}/page.html`, allowedHostSuffixes: ['127.0.0.1'], metadata: null }));
-      await expect(processMediaJob('job-platform04', platformJob('mp4'), ctx.deps, ctx.report)).rejects.toMatchObject({ code: 'UNSUPPORTED_MEDIA' });
-    });
-
-    it('treats an expired CDN link as retryable', async () => {
-      const ctx = await setup({}, async () => ({ url: `${serverUrl}/gone.mp4`, allowedHostSuffixes: ['127.0.0.1'], metadata: null }));
-      await expect(processMediaJob('job-platform05', platformJob('mp4'), ctx.deps, ctx.report)).rejects.toMatchObject({ code: 'PLATFORM_API_ERROR', retryable: true });
-    });
-
-    it('fails fast, with the adapter\'s own message, when there is no permitted source (e.g. YouTube)', async () => {
-      const ctx = await setup();
-      const job: MediaJobData = {
-        source: { kind: 'platform', platform: 'youtube', canonicalUrl: 'https://www.youtube.com/watch?v=dQw4w9WgXcQ', mediaId: 'dQw4w9WgXcQ' },
-        format: 'mp4',
-        createdAt: new Date().toISOString(),
-      };
-      await expect(processMediaJob('job-platform06', job, ctx.deps, ctx.report)).rejects.toMatchObject({
-        code: 'UNAUTHORIZED_SOURCE',
-        retryable: false,
-        message: 'No permitted route.',
-      });
-      expect(ctx.stages.some(([stage]) => stage === 'downloading')).toBe(false); // nothing was fetched
+    it('propagates download refusals (e.g. YouTube blocking the server) untouched', async () => {
+      const blocked = new AppError('PLATFORM_API_ERROR', 'YouTube is blocking this server', { retryable: false });
+      const ctx = await setup({}, vi.fn(async () => Promise.reject(blocked)));
+      await expect(processMediaJob('job-link00005', linkJob('mp4'), ctx.deps, ctx.report)).rejects.toBe(blocked);
+      expect(await ctx.storage.head('outputs/job-link00005/output.mp4')).toBeNull();
     });
   });
 
@@ -267,10 +214,9 @@ describe('processMediaJob', () => {
     const ctx = await setup();
     await ctx.putUpload(fx.h264Aac);
     const result = await processMediaJob('job-verify0001', uploadJob('mp4', 'v.mp4'), ctx.deps, ctx.report);
-    const out = ctx.storage.pathFor(result.storageKey);
-    expect((await stat(out)).size).toBe(result.sizeBytes);
     const copy = join(ctx.storageDir, 'verify.mp4');
-    await copyFile(out, copy);
+    await copyFile(ctx.storage.pathFor(result.storageKey), copy);
+    expect((await stat(copy)).size).toBe(result.sizeBytes);
     const probe = await probeFile(copy, ctx.config.ffmpeg);
     expect(probe.formatName).toContain('mp4');
     expect(probe.video?.codec).toBe('h264');

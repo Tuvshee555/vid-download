@@ -4,8 +4,8 @@ import { mkdtemp, rm } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { buildMp3Args, buildMp4Args, planMp3, planMp4, probeFile, runFfmpeg, type ProbeResult } from '../src/services/ffmpeg';
-import { makeFixtures, type Fixtures } from './fixtures';
+import { buildMp3Args, buildMp4Args, planMp3, planMp4, probeFile, probeWithFfmpeg, runFfmpeg, type ProbeResult } from './ffmpeg';
+import { makeFixtures, type Fixtures } from './test-fixtures';
 
 const paths = { ffmpegPath: 'ffmpeg', ffprobePath: 'ffprobe' };
 
@@ -67,7 +67,8 @@ describe('FFmpeg argument safety', () => {
     expect(copy).toEqual(expect.arrayContaining(['-c:v', 'copy', '-c:a', 'copy']));
     expect(copy).not.toContain('libx264');
     const encode = buildMp4Args('i', 'o', { video: 'encode', audio: 'encode' });
-    expect(encode).toEqual(expect.arrayContaining(['libx264', '-crf', '18', 'aac']));
+    expect(encode).toEqual(expect.arrayContaining(['libx264', '-preset', 'veryfast', '-crf', '20', 'aac']));
+    expect(buildMp4Args('i', 'o', { video: 'encode', audio: 'none' }, { x264Preset: 'medium', crf: 18 })).toEqual(expect.arrayContaining(['medium', '18']));
     expect(buildMp3Args('i', 'o', { mode: 'copy', bitrateKbps: null }, null)).not.toContain('libmp3lame');
   });
 });
@@ -122,6 +123,29 @@ describe('with real FFmpeg', () => {
       } finally {
         await new Promise<void>((resolve) => server.close(() => resolve()));
       }
+    });
+  });
+
+  describe('probeWithFfmpeg (serverless fallback, no ffprobe)', () => {
+    it.each(['h264Aac', 'vp9Opus', 'h264Opus', 'audioOnlyM4a', 'videoOnly', 'audioMp3', 'audioFlac'] as const)('matches ffprobe for %s', async (name) => {
+      const viaProbe = await probeFile(fx[name], paths);
+      const viaFfmpeg = await probeWithFfmpeg(fx[name], 'ffmpeg');
+      expect(viaFfmpeg.video?.codec ?? null).toBe(viaProbe.video?.codec ?? null);
+      expect(viaFfmpeg.video?.width ?? null).toBe(viaProbe.video?.width ?? null);
+      expect(viaFfmpeg.video?.height ?? null).toBe(viaProbe.video?.height ?? null);
+      expect(viaFfmpeg.audio?.codec ?? null).toBe(viaProbe.audio?.codec ?? null);
+      expect(Math.abs((viaFfmpeg.durationSeconds ?? 0) - (viaProbe.durationSeconds ?? 0))).toBeLessThan(0.1);
+      expect(planMp4(viaFfmpeg)).toEqual(planMp4(viaProbe));
+    });
+
+    it('is used automatically when ffprobePath is null', async () => {
+      const probe = await probeFile(fx.h264Aac, { ffmpegPath: 'ffmpeg', ffprobePath: null });
+      expect(probe.video).toMatchObject({ codec: 'h264', width: 320, height: 240 });
+    });
+
+    it('rejects text files and images exactly like ffprobe does', async () => {
+      await expect(probeWithFfmpeg(fx.notMedia, 'ffmpeg')).rejects.toMatchObject({ code: 'UNSUPPORTED_MEDIA' });
+      await expect(probeWithFfmpeg(fx.png, 'ffmpeg')).rejects.toMatchObject({ code: 'UNSUPPORTED_MEDIA' });
     });
   });
 

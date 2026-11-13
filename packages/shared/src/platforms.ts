@@ -4,19 +4,20 @@
  * This module is the first line of defence for SSRF and open-proxy abuse: only exact,
  * known hostnames are accepted, credentials / odd ports / IP literals / local names are
  * rejected, and the canonical URL we hand to the rest of the system is *rebuilt from the
- * parsed media ID* — the raw user string is never forwarded anywhere.
+ * parsed, pattern-checked parts* — the raw user string is never forwarded anywhere.
  *
  * It is dependency-free and browser-safe so the web UI can use the same logic for instant
  * feedback.
  */
 
-export const PLATFORMS = ['youtube', 'instagram', 'facebook'] as const;
+export const PLATFORMS = ['youtube', 'instagram', 'facebook', 'tiktok'] as const;
 export type Platform = (typeof PLATFORMS)[number];
 
 export const PLATFORM_NAMES: Record<Platform, string> = {
   youtube: 'YouTube',
   instagram: 'Instagram',
   facebook: 'Facebook',
+  tiktok: 'TikTok',
 };
 
 export const MAX_URL_LENGTH = 2048;
@@ -25,7 +26,8 @@ export const MAX_URL_LENGTH = 2048;
 export const PLATFORM_HOSTS: Record<Platform, readonly string[]> = {
   youtube: ['youtube.com', 'www.youtube.com', 'm.youtube.com', 'music.youtube.com', 'youtu.be', 'www.youtu.be'],
   instagram: ['instagram.com', 'www.instagram.com', 'instagr.am', 'www.instagr.am'],
-  facebook: ['facebook.com', 'www.facebook.com', 'm.facebook.com', 'web.facebook.com', 'mbasic.facebook.com', 'fb.watch'],
+  facebook: ['facebook.com', 'www.facebook.com', 'm.facebook.com', 'web.facebook.com', 'mbasic.facebook.com', 'fb.watch', 'www.fb.watch'],
+  tiktok: ['tiktok.com', 'www.tiktok.com', 'm.tiktok.com', 'vm.tiktok.com', 'vt.tiktok.com'],
 };
 
 export type MediaKind = 'video' | 'short' | 'reel' | 'post';
@@ -36,7 +38,7 @@ export type UrlDetection =
   | {
       ok: true;
       platform: Platform;
-      /** Rebuilt from the media ID — safe to log, store and display. */
+      /** Rebuilt from validated parts — safe to log, store and hand to the downloader. */
       canonicalUrl: string;
       mediaId: string;
       kind: MediaKind;
@@ -52,6 +54,12 @@ export type UrlDetection =
 const YOUTUBE_ID = /^[A-Za-z0-9_-]{11}$/;
 const INSTAGRAM_CODE = /^[A-Za-z0-9_-]{5,40}$/;
 const FACEBOOK_ID = /^\d{5,25}$/;
+const FACEBOOK_SLUG = /^[A-Za-z0-9.-]{1,80}$/;
+const FACEBOOK_POST_ID = /^(pfbid[A-Za-z0-9]{10,80}|\d{5,25})$/;
+const SHARE_CODE = /^[A-Za-z0-9_-]{5,40}$/;
+const TIKTOK_ID = /^\d{15,25}$/;
+const TIKTOK_USER = /^[A-Za-z0-9._-]{1,40}$/;
+const TIKTOK_SHORT = /^[A-Za-z0-9]{5,20}$/;
 
 const HAS_SCHEME = /^[a-z][a-z0-9+.-]*:\/\//i;
 const DANGEROUS_SCHEME = /^(javascript|data|file|mailto|blob|about|vbscript|ftp|gopher|ws|wss|chrome|view-source):/i;
@@ -163,39 +171,63 @@ function parseInstagram(url: URL): UrlDetection {
 }
 
 function parseFacebook(url: URL, host: string): UrlDetection {
-  if (host === 'fb.watch') {
-    return reject(
-      'UNSUPPORTED_URL_TYPE',
-      'fb.watch short links are not supported. Open the link in your browser and paste the full facebook.com/…/videos/… address.',
-      'facebook',
-    );
+  const segments = nonEmptySegments(url.pathname);
+
+  // fb.watch/CODE short links — resolved by the downloader via Facebook's own redirect.
+  if (host === 'fb.watch' || host === 'www.fb.watch') {
+    const code = segments[0];
+    if (!code || !SHARE_CODE.test(code)) {
+      return reject('INVALID_URL', "We couldn't find a valid fb.watch code in this link.", 'facebook');
+    }
+    return { ok: true, platform: 'facebook', canonicalUrl: `https://fb.watch/${code}/`, mediaId: code, kind: 'video' };
   }
 
-  const segments = nonEmptySegments(url.pathname);
   const first = segments[0]?.toLowerCase();
   let id: string | undefined;
   let kind: MediaKind = 'video';
 
-  if (first === 'watch') {
-    id = url.searchParams.get('v') ?? undefined;
-  } else if (first === 'video.php') {
+  if (first === 'share') {
+    // /share/v/CODE (video), /share/r/CODE (reel)
+    const type = segments[1]?.toLowerCase();
+    const code = segments[2];
+    if ((type !== 'v' && type !== 'r') || !code || !SHARE_CODE.test(code)) {
+      return reject('UNSUPPORTED_URL_TYPE', 'This Facebook share link is not a video. Paste the link of a video or reel.', 'facebook');
+    }
+    return {
+      ok: true,
+      platform: 'facebook',
+      canonicalUrl: `https://www.facebook.com/share/${type}/${code}/`,
+      mediaId: code,
+      kind: type === 'r' ? 'reel' : 'video',
+    };
+  }
+
+  if (first === 'watch' || first === 'video.php') {
     id = url.searchParams.get('v') ?? undefined;
   } else if (first === 'reel') {
     id = segments[1];
     kind = 'reel';
-  } else if (first === 'share') {
-    return reject(
-      'UNSUPPORTED_URL_TYPE',
-      'Facebook share links are not supported. Open the link in your browser and paste the full facebook.com/…/videos/… address.',
-      'facebook',
-    );
+  } else if (segments[1]?.toLowerCase() === 'posts') {
+    // /{page}/posts/{id} — a post that contains a video
+    const page = segments[0];
+    const postId = segments[2];
+    if (!page || !FACEBOOK_SLUG.test(page) || !postId || !FACEBOOK_POST_ID.test(postId)) {
+      return reject('INVALID_URL', "We couldn't find a valid Facebook post in this link.", 'facebook');
+    }
+    return {
+      ok: true,
+      platform: 'facebook',
+      canonicalUrl: `https://www.facebook.com/${page}/posts/${postId}/`,
+      mediaId: postId,
+      kind: 'post',
+    };
   } else {
     // /{page}/videos/ID  or  /{page}/videos/{slug}/ID
     const videosIndex = segments.findIndex((segment) => segment.toLowerCase() === 'videos');
     if (videosIndex === -1) {
       return reject(
         'UNSUPPORTED_URL_TYPE',
-        'This Facebook link is not a single video. Paste a link that looks like facebook.com/watch/?v=… or facebook.com/{page}/videos/….',
+        'This Facebook link is not a single video. Paste a link that looks like facebook.com/watch/?v=…, facebook.com/{page}/videos/…, facebook.com/reel/… or fb.watch/….',
         'facebook',
       );
     }
@@ -208,10 +240,50 @@ function parseFacebook(url: URL, host: string): UrlDetection {
   return {
     ok: true,
     platform: 'facebook',
-    canonicalUrl: `https://www.facebook.com/watch/?v=${id}`,
+    canonicalUrl: kind === 'reel' ? `https://www.facebook.com/reel/${id}` : `https://www.facebook.com/watch/?v=${id}`,
     mediaId: id,
     kind,
   };
+}
+
+function parseTikTok(url: URL, host: string): UrlDetection {
+  const segments = nonEmptySegments(url.pathname);
+
+  // vm.tiktok.com/CODE and vt.tiktok.com/CODE — the links the TikTok app's "Share" button produces.
+  if (host === 'vm.tiktok.com' || host === 'vt.tiktok.com') {
+    const code = segments[0];
+    if (!code || !TIKTOK_SHORT.test(code)) {
+      return reject('INVALID_URL', "We couldn't find a valid TikTok share code in this link.", 'tiktok');
+    }
+    return { ok: true, platform: 'tiktok', canonicalUrl: `https://${host}/${code}/`, mediaId: code, kind: 'video' };
+  }
+
+  const first = segments[0] ?? '';
+  if (first.toLowerCase() === 't') {
+    const code = segments[1];
+    if (!code || !TIKTOK_SHORT.test(code)) {
+      return reject('INVALID_URL', "We couldn't find a valid TikTok share code in this link.", 'tiktok');
+    }
+    return { ok: true, platform: 'tiktok', canonicalUrl: `https://www.tiktok.com/t/${code}/`, mediaId: code, kind: 'video' };
+  }
+
+  if (first.startsWith('@')) {
+    const user = first.slice(1);
+    const type = segments[1]?.toLowerCase();
+    const id = segments[2];
+    if (type === 'photo') {
+      return reject('UNSUPPORTED_URL_TYPE', 'TikTok photo posts are not supported. Paste the link of a TikTok video.', 'tiktok');
+    }
+    if (type !== 'video') {
+      return reject('UNSUPPORTED_URL_TYPE', 'This TikTok link is not a single video. Paste a link that looks like tiktok.com/@user/video/….', 'tiktok');
+    }
+    if (!TIKTOK_USER.test(user) || !id || !TIKTOK_ID.test(id)) {
+      return reject('INVALID_URL', "We couldn't find a valid TikTok video ID in this link.", 'tiktok');
+    }
+    return { ok: true, platform: 'tiktok', canonicalUrl: `https://www.tiktok.com/@${user}/video/${id}`, mediaId: id, kind: 'video' };
+  }
+
+  return reject('UNSUPPORTED_URL_TYPE', 'This TikTok link is not a single video. Paste a link that looks like tiktok.com/@user/video/… or vm.tiktok.com/….', 'tiktok');
 }
 
 /**
@@ -223,7 +295,7 @@ function parseFacebook(url: URL, host: string): UrlDetection {
 export function detectUrl(input: string): UrlDetection {
   const raw = typeof input === 'string' ? input.trim() : '';
   if (raw === '') {
-    return reject('INVALID_URL', 'Paste a YouTube, Instagram or Facebook link to get started.');
+    return reject('INVALID_URL', 'Paste a YouTube, Instagram, Facebook or TikTok link to get started.');
   }
   if (raw.length > MAX_URL_LENGTH) {
     return reject('INVALID_URL', 'That link is too long.');
@@ -262,7 +334,7 @@ export function detectUrl(input: string): UrlDetection {
   if (!platform) {
     return reject(
       'UNSUPPORTED_DOMAIN',
-      "This website isn't supported. MediaDock only accepts YouTube, Instagram and Facebook links.",
+      "This website isn't supported. MediaDock accepts YouTube, Instagram, Facebook and TikTok links.",
     );
   }
   if (url.port !== '') {
@@ -276,6 +348,8 @@ export function detectUrl(input: string): UrlDetection {
       return parseInstagram(url);
     case 'facebook':
       return parseFacebook(url, host);
+    case 'tiktok':
+      return parseTikTok(url, host);
   }
 }
 

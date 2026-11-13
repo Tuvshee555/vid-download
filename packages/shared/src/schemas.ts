@@ -22,6 +22,8 @@ export const createJobRequestSchema = z.discriminatedUnion('source', [
     source: z.literal('url'),
     url: urlInputSchema,
     format: mediaFormatSchema,
+    /** Maximum video height for MP4 (e.g. 720). Omit for the best available. */
+    quality: z.number().int().min(100).max(4320).optional(),
   }),
   z.object({
     source: z.literal('upload'),

@@ -20,6 +20,8 @@ import {
   unreachableError,
 } from '@/lib/bff';
 import { isAllowedRoute, type ProxyMethod } from '@/lib/proxy-allowlist';
+import { serverMode } from '@/lib/server/standalone';
+import { handleStandalone } from '@/lib/server/standalone-api';
 
 export const dynamic = 'force-dynamic';
 
@@ -54,6 +56,17 @@ async function handle(request: NextRequest, context: RouteContext, method: Proxy
     if (text === null) return jsonError('VALIDATION_ERROR', { status: 413, message: 'That request was too large.' });
     body = text;
     headers['content-type'] = 'application/json';
+  }
+
+  // Standalone (single Vercel project): answer here instead of proxying to an external API.
+  if (serverMode() === 'standalone') {
+    const response = await handleStandalone(method, path, token, body);
+    if (response.status === 401) {
+      const cleared = new Response(response.body, response);
+      cleared.headers.append('set-cookie', `${SESSION_COOKIE}=; Path=/; Max-Age=0; HttpOnly; SameSite=Lax`);
+      return cleared;
+    }
+    return response;
   }
 
   let upstream: Response;

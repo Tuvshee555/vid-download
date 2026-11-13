@@ -54,6 +54,7 @@ export class JobService {
       data = {
         source: { kind: 'platform', platform: detection.platform, canonicalUrl: detection.canonicalUrl, mediaId: detection.mediaId },
         format: request.format,
+        quality: request.format === 'mp4' ? (request.quality ?? null) : null,
         createdAt: new Date().toISOString(),
       };
     } else {

@@ -29,15 +29,17 @@ export interface MediaMetadata {
 }
 
 export interface MediaOption {
-  /** Same as `format`; one option per output format. */
-  id: MediaFormat;
+  /** Unique per option, e.g. "mp4-1080", "mp4-best", "mp3". */
+  id: string;
   format: MediaFormat;
-  /** e.g. "MP4 video" / "MP3 audio". */
+  /** Maximum video height for MP4 options (sent back as `quality` when creating a job); null = best available / audio. */
+  quality: number | null;
+  /** e.g. "MP4 1080p" / "MP3 audio". */
   label: string;
   container: string;
   /** Only present when the platform reports it truthfully. */
   resolution: string | null;
-  /** Source file size when the platform reports it; MP3 size is never guessed. */
+  /** Approximate size when the platform reports it; never invented. */
   sizeBytes: number | null;
   /** Honest caveat shown under the option, e.g. "Original quality, no re-encoding where possible." */
   note: string | null;
@@ -168,7 +170,7 @@ export interface PlatformInfo {
    * - `own-media`: downloads media owned by the account connected to the server, via the official API.
    * - `metadata-only`: recognises links and shows details, but the platform offers no permitted download API.
    */
-  capability: 'own-media' | 'metadata-only';
+  capability: 'public-links' | 'own-media' | 'metadata-only';
   /** What this integration can legitimately do. Rendered verbatim in the UI. */
   summary: string;
 }

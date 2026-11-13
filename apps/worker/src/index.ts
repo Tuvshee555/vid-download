@@ -24,13 +24,18 @@ async function main(): Promise<void> {
   const config = loadConfig();
   const log = createLogger('worker', config.logLevel);
 
-  // Fail fast and loudly if FFmpeg is missing, instead of failing every job later.
-  for (const binary of [config.ffmpeg.ffmpegPath, config.ffmpeg.ffprobePath]) {
+  // Fail fast and loudly if a required binary is missing, instead of failing every job later.
+  const binaries: Array<[string, string[], string]> = [
+    [config.ffmpeg.ffmpegPath, ['-version'], 'Install FFmpeg or set FFMPEG_PATH.'],
+    ...(config.ffmpeg.ffprobePath ? [[config.ffmpeg.ffprobePath, ['-version'], 'Install FFmpeg (includes ffprobe), set FFPROBE_PATH, or FFPROBE_PATH=none.'] as [string, string[], string]] : []),
+    [config.ytdlp.binPath, ['--version'], 'Install yt-dlp (https://github.com/yt-dlp/yt-dlp) or set YTDLP_PATH.'],
+  ];
+  for (const [binary, args, hint] of binaries) {
     try {
-      const { stdout } = await execFileAsync(binary, ['-version'], { timeout: 10_000, windowsHide: true });
-      log.info({ binary, version: stdout.split('\n')[0] }, 'found media binary');
+      const { stdout } = await execFileAsync(binary, args, { timeout: 15_000, windowsHide: true });
+      log.info({ binary, version: stdout.split('\n')[0]?.trim() }, 'found binary');
     } catch (error) {
-      throw new ConfigError(`Cannot run "${binary}". Install FFmpeg (it includes ffprobe) or set FFMPEG_PATH / FFPROBE_PATH. (${(error as Error).message})`);
+      throw new ConfigError(`Cannot run "${binary}". ${hint} (${(error as Error).message})`);
     }
   }
   if (config.isProduction && config.storage.driver === 'local') {

@@ -2,10 +2,16 @@
   "name": "@vd/core",
   "version": "1.0.0",
   "private": true,
-  "description": "Server-side building blocks shared by api and worker: config, auth tokens, SSRF-safe networking, storage, queue, platform adapters.",
+  "description": "Server-side building blocks shared by api, worker and the serverless web app: config, auth tokens, yt-dlp/FFmpeg media pipeline, storage, queue, platform adapters.",
   "type": "module",
   "exports": {
-    ".": "./src/index.ts"
+    ".": "./src/index.ts",
+    "./auth": "./src/auth.ts",
+    "./config": "./src/config.ts",
+    "./media": "./src/media/index.ts",
+    "./adapters": "./src/adapters/index.ts",
+    "./runtime": "./src/runtime.ts",
+    "./storage-headers": "./src/storage/content-disposition.ts"
   },
   "scripts": {
     "typecheck": "tsc --noEmit",

@@ -45,7 +45,7 @@ export const ERROR_CATALOGUE: Record<ErrorCode, ErrorDefinition> = {
   },
   UNSUPPORTED_DOMAIN: {
     status: 400,
-    message: "This website isn't supported. MediaDock only accepts YouTube, Instagram and Facebook links.",
+    message: "This website isn't supported. MediaDock accepts YouTube, Instagram, Facebook and TikTok links.",
     retryable: false,
   },
   UNSUPPORTED_URL_TYPE: {

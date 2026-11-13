@@ -36,13 +36,13 @@ describe('UrlForm', () => {
   it('submits a valid link, trimmed', async () => {
     const { user, input, onSubmit } = setup();
     await user.type(input, `  ${YT}  `);
-    await user.click(screen.getByRole('button', { name: /get download options/i }));
+    await user.click(screen.getByRole('button', { name: /^download$/i }));
     expect(onSubmit).toHaveBeenCalledExactlyOnceWith(YT);
   });
 
   it('shows an inline message and does not submit an empty form', async () => {
     const { user, onSubmit } = setup();
-    await user.click(screen.getByRole('button', { name: /get download options/i }));
+    await user.click(screen.getByRole('button', { name: /^download$/i }));
     expect(screen.getByText(/paste a youtube, instagram or facebook link first/i)).toBeInTheDocument();
     expect(onSubmit).not.toHaveBeenCalled();
   });
@@ -55,7 +55,7 @@ describe('UrlForm', () => {
   ])('rejects %s inline without calling the API', async (value, message) => {
     const { user, input, onSubmit } = setup();
     await user.type(input, value);
-    await user.click(screen.getByRole('button', { name: /get download options/i }));
+    await user.click(screen.getByRole('button', { name: /^download$/i }));
     expect(screen.getByText(message)).toBeInTheDocument();
     expect(input).toHaveAttribute('aria-invalid', 'true');
     expect(onSubmit).not.toHaveBeenCalled();

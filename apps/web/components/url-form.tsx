@@ -75,7 +75,7 @@ export function UrlForm({ onSubmit, onPlatformChange, busy = false }: UrlFormPro
             autoComplete="off"
             autoCapitalize="off"
             spellCheck={false}
-            placeholder="Paste a YouTube, Instagram or Facebook link"
+            placeholder="Paste a YouTube, Instagram, Facebook or TikTok link"
             aria-invalid={message ? true : undefined}
             aria-describedby={message ? messageId : undefined}
             className="h-14 pr-28 text-base"
@@ -100,7 +100,7 @@ export function UrlForm({ onSubmit, onPlatformChange, busy = false }: UrlFormPro
           ) : (
             <>
               <Download className="size-5" aria-hidden />
-              Get download options
+              Download
             </>
           )}
         </Button>

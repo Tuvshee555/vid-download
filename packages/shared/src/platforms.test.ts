@@ -109,7 +109,6 @@ describe('Facebook URL detection', () => {
     ['https://www.facebook.com/video.php?v=1234567890123', 'video'],
     ['https://www.facebook.com/somepage/videos/1234567890123/', 'video'],
     ['https://www.facebook.com/somepage/videos/some-title-slug/1234567890123/', 'video'],
-    ['https://www.facebook.com/reel/1234567890123', 'reel'],
     ['facebook.com/watch/?v=1234567890123', 'video'],
   ])('accepts %s', (input, kind) => {
     const result = ok(input);
@@ -119,13 +118,26 @@ describe('Facebook URL detection', () => {
     expect(result.canonicalUrl).toBe('https://www.facebook.com/watch/?v=1234567890123');
   });
 
-  it('rejects short links, share links and non-video pages', () => {
+  it('keeps reels, short links, share links and posts in a rebuilt canonical form', () => {
+    expect(ok('https://www.facebook.com/reel/1234567890123?mibextid=abc')).toMatchObject({ kind: 'reel', canonicalUrl: 'https://www.facebook.com/reel/1234567890123' });
+    expect(ok('https://fb.watch/abc123XY/?mibextid=x')).toMatchObject({ mediaId: 'abc123XY', canonicalUrl: 'https://fb.watch/abc123XY/' });
+    expect(ok('https://www.facebook.com/share/v/AbC123de/')).toMatchObject({ kind: 'video', canonicalUrl: 'https://www.facebook.com/share/v/AbC123de/' });
+    expect(ok('https://m.facebook.com/share/r/AbC123de/')).toMatchObject({ kind: 'reel', canonicalUrl: 'https://www.facebook.com/share/r/AbC123de/' });
+    expect(ok('https://www.facebook.com/GOAL/posts/pfbid0abcdefghijkLMNOP123')).toMatchObject({ kind: 'post', canonicalUrl: 'https://www.facebook.com/GOAL/posts/pfbid0abcdefghijkLMNOP123/' });
+  });
+
+  it('rejects malformed short/share codes (nothing odd reaches the downloader)', () => {
+    expect(rejected('https://fb.watch/').code).toBe('INVALID_URL');
+    expect(rejected('https://fb.watch/a%2F..%2F/').code).toBe('INVALID_URL');
+    expect(rejected('https://www.facebook.com/share/p/AbC123de/').code).toBe('UNSUPPORTED_URL_TYPE');
+    expect(rejected('https://www.facebook.com/GOAL/posts/../../x').code).not.toBe(undefined);
+  });
+
+  it('rejects non-video pages', () => {
     for (const input of [
-      'https://fb.watch/abc123/',
-      'https://www.facebook.com/share/v/AbC123/',
-      'https://www.facebook.com/somepage/posts/123456789',
       'https://www.facebook.com/somepage',
       'https://www.facebook.com/',
+      'https://www.facebook.com/groups/123/about',
     ]) {
       const result = rejected(input);
       expect(result.code).toBe('UNSUPPORTED_URL_TYPE');
@@ -136,6 +148,32 @@ describe('Facebook URL detection', () => {
   it('rejects malformed video IDs', () => {
     expect(rejected('https://www.facebook.com/watch/?v=abc').code).toBe('INVALID_URL');
     expect(rejected('https://www.facebook.com/watch/').code).toBe('INVALID_URL');
+  });
+});
+
+describe('TikTok URL detection', () => {
+  it.each([
+    ['https://www.tiktok.com/@realmadrid/video/7707305867162570017', 'https://www.tiktok.com/@realmadrid/video/7707305867162570017'],
+    ['https://www.tiktok.com/@premier.league_/video/7707329238692678944?is_from_webapp=1&sender_device=pc', 'https://www.tiktok.com/@premier.league_/video/7707329238692678944'],
+    ['https://m.tiktok.com/@realmadrid/video/7707305867162570017', 'https://www.tiktok.com/@realmadrid/video/7707305867162570017'],
+    ['tiktok.com/@realmadrid/video/7707305867162570017', 'https://www.tiktok.com/@realmadrid/video/7707305867162570017'],
+    ['https://vm.tiktok.com/ZMh3kAbCd/', 'https://vm.tiktok.com/ZMh3kAbCd/'],
+    ['https://vt.tiktok.com/ZSabc123/', 'https://vt.tiktok.com/ZSabc123/'],
+    ['https://www.tiktok.com/t/ZTRabc123/', 'https://www.tiktok.com/t/ZTRabc123/'],
+  ])('accepts %s', (input, canonical) => {
+    const result = ok(input);
+    expect(result.platform).toBe('tiktok');
+    expect(result.canonicalUrl).toBe(canonical);
+  });
+
+  it('rejects photo posts, profiles and malformed IDs', () => {
+    expect(rejected('https://www.tiktok.com/@realmadrid/photo/7707305867162570017').code).toBe('UNSUPPORTED_URL_TYPE');
+    expect(rejected('https://www.tiktok.com/@realmadrid').code).toBe('UNSUPPORTED_URL_TYPE');
+    expect(rejected('https://www.tiktok.com/').code).toBe('UNSUPPORTED_URL_TYPE');
+    expect(rejected('https://www.tiktok.com/@realmadrid/video/123').code).toBe('INVALID_URL');
+    expect(rejected('https://vm.tiktok.com/').code).toBe('INVALID_URL');
+    expect(rejected('https://www.tiktok.com/@bad user/video/7707305867162570017').code).toBe('INVALID_URL');
+    expect(rejected('https://www.tiktok.com.evil.example/@a/video/7707305867162570017').code).toBe('UNSUPPORTED_DOMAIN');
   });
 });
 
@@ -178,7 +216,6 @@ describe('unsupported domain rejection', () => {
   it.each([
     ['https://vimeo.com/123456'],
     ['https://example.com/watch?v=dQw4w9WgXcQ'],
-    ['https://www.tiktok.com/@user/video/123'],
     ['https://youtube.com.evil.example/watch?v=dQw4w9WgXcQ'],
     ['https://evil.example/youtube.com/watch?v=dQw4w9WgXcQ'],
     ['https://notyoutube.com/watch?v=dQw4w9WgXcQ'],

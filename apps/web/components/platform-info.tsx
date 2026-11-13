@@ -44,7 +44,9 @@ export function PlatformInfo() {
                   <div className="space-y-1">
                     <p className="flex flex-wrap items-center gap-2 font-medium">
                       {platform.name}
-                      {platform.capability === 'own-media' ? (
+                      {platform.capability === 'public-links' ? (
+                        <Badge variant="success">Public videos</Badge>
+                      ) : platform.capability === 'own-media' ? (
                         <>
                           <Badge variant="success">Your own media</Badge>
                           {!platform.configured ? <Badge variant="warning">Not connected</Badge> : null}

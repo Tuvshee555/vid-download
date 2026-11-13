@@ -3,13 +3,14 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { FastifyInstance } from 'fastify';
 import { vi } from 'vitest';
+import { AppError } from '@vd/shared';
 import {
   LocalStorage,
   createAdapters,
   loadConfig,
   silentLogger,
-  type HttpClient,
-  type JsonResponse,
+  type InfoFetcher,
+  type YtDlpInfo,
   type MediaJobData,
 } from '@vd/core';
 import { buildApp } from '../src/app';
@@ -55,37 +56,24 @@ export class InMemoryJobQueue implements JobQueue {
   }
 }
 
-type Route = (url: URL) => JsonResponse | Promise<JsonResponse>;
+/** Realistic `yt-dlp -J` output, trimmed. */
+export const reelInfo: YtDlpInfo = {
+  title: 'Video by myshop',
+  description: 'Launch day',
+  uploader: 'myshop',
+  duration: 21,
+  formats: [
+    { format_id: 'v720', ext: 'mp4', vcodec: 'avc1.64001f', acodec: 'none', width: 720, height: 1280, filesize: 5_000_000 },
+    { format_id: 'v360', ext: 'mp4', vcodec: 'avc1.4d401e', acodec: 'none', width: 360, height: 640, filesize: 1_500_000 },
+    { format_id: 'a', ext: 'm4a', vcodec: 'none', acodec: 'mp4a.40.2', filesize: 300_000 },
+  ],
+};
 
-export function fakeHttp(route: Route): HttpClient {
-  return {
-    getJson: vi.fn(async (url: string) => route(new URL(url))),
-    headContentLength: vi.fn(async () => 2_000_000),
-  };
-}
-
-export const defaultHttp = fakeHttp((url) => {
-  if (url.pathname === '/oembed') {
-    return { status: 200, body: { title: 'Some video', author_name: 'Some channel', thumbnail_url: 'https://i.ytimg.com/vi/x/hq.jpg' } };
-  }
-  if (url.hostname === 'graph.instagram.com') {
-    if (url.pathname.endsWith('/me')) return { status: 200, body: { username: 'myshop' } };
-    return {
-      status: 200,
-      body: {
-        data: [
-          {
-            id: '1',
-            caption: 'Launch day',
-            media_type: 'VIDEO',
-            media_url: 'https://scontent.cdninstagram.com/v/a.mp4',
-            permalink: 'https://www.instagram.com/reel/Cabc123XYZ/',
-          },
-        ],
-      },
-    };
-  }
-  return { status: 404, body: null };
+/** Fake yt-dlp: a known reel, a private one, and YouTube's metadata. */
+export const defaultFetchInfo: InfoFetcher = vi.fn(async (url: string) => {
+  if (url.includes('NotMyReel99')) throw new AppError('PRIVATE_CONTENT', 'This Instagram video is private, age-restricted, region-locked or needs a login, so it can’t be downloaded.');
+  if (url.includes('youtube.com')) return { ...reelInfo, title: 'Some video', uploader: 'Some channel', description: null };
+  return reelInfo;
 });
 
 export interface TestContext {
@@ -101,7 +89,7 @@ export interface TestContext {
 
 export async function createTestContext(
   env: Record<string, string> = {},
-  http: HttpClient = defaultHttp,
+  fetchInfo: InfoFetcher = defaultFetchInfo,
 ): Promise<TestContext> {
   const dir = await mkdtemp(join(tmpdir(), 'vd-api-test-'));
   const config = loadConfig({
@@ -111,12 +99,11 @@ export async function createTestContext(
     WEB_ORIGIN,
     API_PUBLIC_URL: 'http://api.test',
     STORAGE_LOCAL_DIR: dir,
-    INSTAGRAM_ACCESS_TOKEN: 'ig-token',
     ...env,
   });
   const queue = new InMemoryJobQueue();
   const storage = new LocalStorage({ dir, apiPublicUrl: config.server.apiPublicUrl, signingSecret: config.auth.sessionSecret });
-  const adapters = createAdapters(config, { http, logger: silentLogger });
+  const adapters = createAdapters(config, { fetchInfo, logger: silentLogger });
   const app = await buildApp({ config, queue, storage, adapters });
   await app.ready();
 
