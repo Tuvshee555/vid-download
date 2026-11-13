@@ -16,6 +16,14 @@ import { assertApiConfig, loadConfig, type AppConfig } from '@vd/core/config';
 
 export type ServerMode = 'standalone' | 'proxy';
 
+/**
+ * MEDIADOCK_AUTH=off: no password, anyone with the link can use the site (the public cloud
+ * deployment). Never set on the home helper — it relies on the password + relay secret instead.
+ */
+export function authDisabled(): boolean {
+  return process.env.MEDIADOCK_AUTH?.toLowerCase() === 'off';
+}
+
 /** Explicit MEDIADOCK_MODE wins; otherwise "proxy" only when an external API is configured. */
 export function serverMode(): ServerMode {
   const mode = process.env.MEDIADOCK_MODE;
@@ -81,7 +89,7 @@ export function standalone(): Standalone {
       // Serverless bundles ship ffmpeg only; files are inspected with ffmpeg itself.
       FFPROBE_PATH: process.env.FFPROBE_PATH ?? 'none',
     });
-    assertApiConfig(config);
+    if (!authDisabled()) assertApiConfig(config);
     instance = { config, adapters: createAdapters(config) };
   }
   return instance;
@@ -101,6 +109,7 @@ export async function standaloneLogin(password: string): Promise<{ token: string
 }
 
 export function standaloneSession(token: string | undefined): { expiresAt: Date } | null {
+  if (authDisabled()) return { expiresAt: new Date(Date.now() + 24 * 3600_000) };
   if (!token) return null;
   const result = verifySessionToken(token, standalone().config.auth.sessionSecret);
   return result.ok ? { expiresAt: new Date(result.payload.exp * 1000) } : null;

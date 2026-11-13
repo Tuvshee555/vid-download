@@ -14,6 +14,7 @@ import {
   type UrlDetection,
 } from '@vd/shared';
 import { HELPER_OFFLINE, isHelperResponse, relayFetch, relayTarget } from '@/lib/server/relay';
+import { allow } from '@/lib/server/limits';
 import { standalone, standaloneSession } from '@/lib/server/standalone';
 
 function json(body: unknown, status = 200): Response {
@@ -66,6 +67,7 @@ export async function handleStandalone(
   token: string | undefined,
   body: string | undefined,
   relayAuthorized = false,
+  clientKey = 'unknown',
 ): Promise<Response> {
   try {
     const session = standaloneSession(token);
@@ -96,6 +98,7 @@ export async function handleStandalone(
     }
 
     if (method === 'POST' && path === 'resolve') {
+      if (!relayAuthorized && !allow(`resolve:${clientKey}`, 30)) throw new AppError('RATE_LIMITED');
       let parsedBody: unknown;
       try {
         parsedBody = JSON.parse(body ?? '');

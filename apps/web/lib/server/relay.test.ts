@@ -12,6 +12,7 @@ vi.mock('@/lib/server/standalone', () => ({
     config: loadConfig({ NODE_ENV: 'test', ACCESS_PASSWORD: 'x' }),
     adapters: new Proxy({}, { get: (_t, platform) => ({ resolve: fakeResolve, describe: () => ({ configured: true, capability: 'public-links', summary: `${String(platform)} summary` }) }) }),
   }),
+  authDisabled: () => false,
   standaloneSession: (token?: string) => (token === 'valid-session' ? { expiresAt: new Date(Date.now() + 60_000) } : null),
 }));
 

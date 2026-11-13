@@ -14,6 +14,7 @@ import { AppError, createJobRequestSchema, detectUrl, type JobProgress, type Job
 import { acquireFromLink, convertInput } from '@vd/core/media';
 import { pipelineDepsFrom } from '@vd/core/runtime';
 import { jsonError, readLimitedText, SESSION_COOKIE } from '@/lib/bff';
+import { acquireConversionSlot, allow, clientIp } from '@/lib/server/limits';
 import { storeOutput, sweepOutputs } from '@/lib/server/output-store';
 import { HELPER_OFFLINE, isHelperResponse, isRelayRequest, relayFetch, relayTarget } from '@/lib/server/relay';
 import { serverMode, standalone, standaloneSession } from '@/lib/server/standalone';
@@ -28,6 +29,11 @@ export async function POST(request: NextRequest): Promise<Response> {
   // A browser session, or the cloud deployment calling this instance (the home helper) with the relay secret.
   const relayAuthorized = isRelayRequest(request.headers);
   if (!relayAuthorized && !standaloneSession(request.cookies.get(SESSION_COOKIE)?.value)) return jsonError('UNAUTHENTICATED');
+
+  // Open site: cap how often one visitor can start conversions (the relay from our own site is exempt; it was limited upstream).
+  if (!relayAuthorized && !allow(`convert:${clientIp(request.headers)}`, 8)) {
+    return jsonError('RATE_LIMITED', { message: 'Too many downloads in a minute. Please wait a bit and try again.' });
+  }
 
   const text = await readLimitedText(request, 16 * 1024);
   if (text === null) return jsonError('VALIDATION_ERROR', { status: 413, message: 'That request was too large.' });
@@ -66,6 +72,10 @@ export async function POST(request: NextRequest): Promise<Response> {
     }
     return jsonError('PLATFORM_API_ERROR', { status: 503, message: `${HELPER_OFFLINE.message} ${HELPER_OFFLINE.guidance[0]}` });
   }
+
+  // At most a few conversions at once per server (protects Vercel limits and the home PC).
+  const releaseSlot = acquireConversionSlot();
+  if (!releaseSlot) return jsonError('RATE_LIMITED', { status: 503, message: 'The server is busy converting other videos. Please try again in a minute.' });
 
   const { config } = standalone();
   const id = randomUUID();
@@ -132,6 +142,7 @@ export async function POST(request: NextRequest): Promise<Response> {
         });
       } finally {
         clearInterval(heartbeat);
+        releaseSlot();
         await rm(dir, { recursive: true, force: true }).catch(() => undefined);
         if (open) {
           open = false;

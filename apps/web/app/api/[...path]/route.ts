@@ -20,8 +20,9 @@ import {
   unreachableError,
 } from '@/lib/bff';
 import { isAllowedRoute, type ProxyMethod } from '@/lib/proxy-allowlist';
+import { clientIp } from '@/lib/server/limits';
 import { isRelayRequest } from '@/lib/server/relay';
-import { serverMode } from '@/lib/server/standalone';
+import { authDisabled, serverMode } from '@/lib/server/standalone';
 import { handleStandalone } from '@/lib/server/standalone-api';
 
 export const dynamic = 'force-dynamic';
@@ -43,7 +44,7 @@ async function handle(request: NextRequest, context: RouteContext, method: Proxy
   const token = request.cookies.get(SESSION_COOKIE)?.value;
   // In standalone mode the cloud deployment may call this instance (the home helper) with the relay secret.
   const relayAuthorized = serverMode() === 'standalone' && isRelayRequest(request.headers);
-  if (!token && !relayAuthorized) return jsonError('UNAUTHENTICATED');
+  if (!token && !relayAuthorized && !(serverMode() === 'standalone' && authDisabled())) return jsonError('UNAUTHENTICATED');
 
   const headers: Record<string, string> = { authorization: `Bearer ${token}`, accept: 'application/json' };
   const forwardedFor = request.headers.get('x-forwarded-for');
@@ -63,7 +64,7 @@ async function handle(request: NextRequest, context: RouteContext, method: Proxy
 
   // Standalone (single Vercel project): answer here instead of proxying to an external API.
   if (serverMode() === 'standalone') {
-    const response = await handleStandalone(method, path, token, body, relayAuthorized);
+    const response = await handleStandalone(method, path, token, body, relayAuthorized, clientIp(request.headers));
     if (response.status === 401) {
       const cleared = new Response(response.body, response);
       cleared.headers.append('set-cookie', `${SESSION_COOKIE}=; Path=/; Max-Age=0; HttpOnly; SameSite=Lax`);

@@ -13,12 +13,13 @@ export type SessionCheck =
 
 export async function getSession(): Promise<SessionCheck> {
   const token = (await cookies()).get(SESSION_COOKIE)?.value;
-  if (!token) return { status: 'unauthenticated' };
 
   if (serverMode() === 'standalone') {
     const session = standaloneSession(token);
     return session ? { status: 'authenticated', expiresAt: session.expiresAt.toISOString() } : { status: 'unauthenticated' };
   }
+
+  if (!token) return { status: 'unauthenticated' };
 
   try {
     const response = await fetch(`${apiBaseUrl()}/v1/auth/session`, {
