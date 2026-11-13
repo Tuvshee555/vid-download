@@ -42,11 +42,7 @@ services:
         sync: false
       - key: S3_SECRET_ACCESS_KEY
         sync: false
-      - key: INSTAGRAM_ACCESS_TOKEN    # optional
-        sync: false
-      - key: FACEBOOK_ACCESS_TOKEN     # optional
-        sync: false
-      - key: YOUTUBE_API_KEY           # optional (metadata only)
+      - key: YTDLP_COOKIES             # optional: Netscape cookies.txt contents, only if YouTube blocks the server
         sync: false
 
   - type: worker
@@ -77,11 +73,7 @@ services:
         sync: false
       - key: WORKER_CONCURRENCY
         value: "2"
-      - key: INSTAGRAM_ACCESS_TOKEN
-        sync: false
-      - key: FACEBOOK_ACCESS_TOKEN
-        sync: false
-      - key: YOUTUBE_API_KEY
+      - key: YTDLP_COOKIES             # optional: Netscape cookies.txt contents, only if YouTube blocks the server
         sync: false
 
   - type: keyvalue
